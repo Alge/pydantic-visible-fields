@@ -290,7 +290,7 @@ class NodeWithSelfReference(VisibleFieldsModel):
     metadata: str = field(visible_to=[Role.EDITOR, Role.ADMIN])
 
 
-NodeWithSelfReference.update_forward_refs()
+NodeWithSelfReference.model_rebuild()
 
 
 # Test Fixtures

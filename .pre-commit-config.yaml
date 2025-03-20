@@ -40,4 +40,3 @@ repos:
           "--no-implicit-optional",
           "--strict-optional",
         ]
-
