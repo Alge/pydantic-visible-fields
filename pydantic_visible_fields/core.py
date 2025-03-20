@@ -102,10 +102,11 @@ def configure_roles(
             for r, inherited_roles in inheritance.items()
         }
 
-    if default_role is not None:
-        _DEFAULT_ROLE = (
-            default_role.value if isinstance(default_role, Enum) else default_role
-        )
+    _DEFAULT_ROLE = (
+        default_role.value
+        if isinstance(default_role, Enum) and default_role is not None
+        else default_role
+    )
 
 
 def get_role_from_request(request: Any) -> Optional[str]:
@@ -302,9 +303,7 @@ class VisibleFieldsMixin:
         return visible_fields
 
     def to_response_model(self, role: Optional[str] = None) -> BaseModel:
-        """
-        Convert this model to a response model for the specified role.
-        """
+        """Convert this model to a response model for the specified role."""
         role = role or self._default_role
 
         if role == self._default_role:
@@ -329,16 +328,16 @@ class VisibleFieldsMixin:
         try:
             # Cast to BaseModel to satisfy type checker.
             return cast(BaseModel, model_cls.model_construct(**processed_data))
-        except Exception as _:
+        except Exception as _:  # noqa: F841
             try:
                 return cast(BaseModel, model_cls.model_validate(processed_data))
-            except Exception as _:
+            except Exception as _:  # noqa: F841
                 try:
                     dynamic_model = self._create_dynamic_model(
                         model_name, processed_data
                     )
                     return dynamic_model.model_validate(processed_data)
-                except Exception as _:
+                except Exception as _:  # noqa: F841
                     ResponseModel = create_model(
                         model_name + "Fallback",
                         **{k: (Any, None) for k in processed_data.keys()},
@@ -374,9 +373,7 @@ class VisibleFieldsMixin:
     def _create_dynamic_model(
         self, base_name: str, data: Dict[str, Any]
     ) -> Type[BaseModel]:
-        """
-        Create a dynamic model that exactly matches the structure of the data.
-        """
+        """Create a dynamic model that exactly matches the structure of the data."""
         model_name = f"{base_name}Dynamic"
         fields: Dict[str, Tuple[Any, Any]] = {}
         for key, value in data.items():
@@ -459,9 +456,7 @@ class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
-        """
-        Initialize the _role_visible_fields for each subclass.
-        """
+        """Initialize the _role_visible_fields for each subclass."""
         cls._role_visible_fields = {}
 
         if _ROLE_ENUM:

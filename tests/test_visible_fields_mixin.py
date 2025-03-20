@@ -5,7 +5,9 @@ This file contains comprehensive tests for all aspects of the visible_fields lib
 including field-level visibility, role inheritance, and complex model structures.
 """
 
+from dataclasses import dataclass
 from enum import Enum
+from types import SimpleNamespace
 from typing import ClassVar, Dict, List, Optional, Set, Union
 
 import pytest
@@ -499,6 +501,201 @@ def empty_list_model():
 
 # Test Cases
 # ----------
+
+"""
+Additional tests for the get_role_from_request function.
+
+This file contains comprehensive tests for the get_role_from_request function
+in the visible_fields library, covering various edge cases and scenarios.
+"""
+
+
+# Define the Role enum for testing (same as in the main test file)
+class Role(str, Enum):
+    VIEWER = "viewer"
+    EDITOR = "editor"
+    ADMIN = "admin"
+
+
+# Test Group: get_role_from_request
+# ---------------------------------
+
+
+class TestGetRoleFromRequest:
+    """Tests for the get_role_from_request function"""
+
+    @pytest.fixture(autouse=True)
+    def setup_roles(self):
+        """Setup role configuration before each test"""
+        # Configure role system with default settings
+        configure_roles(
+            role_enum=Role,
+            inheritance={
+                Role.ADMIN: [Role.EDITOR],
+                Role.EDITOR: [Role.VIEWER],
+            },
+            default_role=Role.VIEWER,
+        )
+        yield
+        # No teardown needed as each test will reconfigure
+
+    def test_request_with_user_role(self):
+        """Test that user_role is extracted from request when present"""
+        # Create a mock request with user_role
+        request = SimpleNamespace(user_role=Role.ADMIN.value)
+
+        # Get role from request
+        role = get_role_from_request(request)
+
+        # Verify correct role is returned
+        assert role == Role.ADMIN.value
+
+    def test_request_without_user_role(self):
+        """Test that default role is used when user_role is not present"""
+        # Create a mock request without user_role
+        request = SimpleNamespace()
+
+        # Get role from request (should use default)
+        role = get_role_from_request(request)
+
+        # Verify default role is returned
+        # (VIEWER is configured as default in the test setup)
+        assert role == Role.VIEWER.value
+
+    def test_none_request(self):
+        """Test behavior when request is None"""
+        # Get role from None request
+        role = get_role_from_request(None)
+
+        # Verify default role is returned
+        assert role == Role.VIEWER.value
+
+    def test_dict_as_request(self):
+        """Test behavior with dict object as request"""
+        # Dictionary doesn't have getattr support for attributes
+        request = {"user_role": Role.EDITOR.value}
+
+        # Get role from dict request (should use default)
+        role = get_role_from_request(request)
+
+        # Verify default role is returned
+        assert role == Role.VIEWER.value
+
+    def test_custom_request_class(self):
+        """Test with a custom request class"""
+
+        # Define a custom request class
+        @dataclass
+        class CustomRequest:
+            user_role: str = Role.EDITOR.value
+
+        request = CustomRequest()
+
+        # Get role from custom request
+        role = get_role_from_request(request)
+
+        # Verify correct role is returned
+        assert role == Role.EDITOR.value
+
+    def test_with_enum_as_role(self):
+        """Test with an Enum value as the role"""
+        # Create a request with Enum value as role
+        request = SimpleNamespace(user_role=Role.ADMIN)  # Using enum directly
+
+        # Get role from request
+        role = get_role_from_request(request)
+
+        # Should convert enum to string value
+        assert role == Role.ADMIN.value
+
+    def test_with_changed_default_role(self):
+        """Test behavior when default role configuration changes"""
+        # Temporarily change default role
+        original_default = Role.VIEWER  # Store original
+
+        try:
+            # Reconfigure with EDITOR as default
+            configure_roles(
+                role_enum=Role,
+                inheritance={
+                    Role.ADMIN: [Role.EDITOR],
+                    Role.EDITOR: [Role.VIEWER],
+                },
+                default_role=Role.EDITOR,
+            )
+
+            # Request without user_role
+            request = SimpleNamespace()
+
+            # Get role from request (should use new default)
+            role = get_role_from_request(request)
+
+            # Verify new default role is returned
+            assert role == Role.EDITOR.value
+
+        finally:
+            # Restore original configuration
+            configure_roles(
+                role_enum=Role,
+                inheritance={
+                    Role.ADMIN: [Role.EDITOR],
+                    Role.EDITOR: [Role.VIEWER],
+                },
+                default_role=original_default,
+            )
+
+    def test_with_no_default_role_configured(self):
+        """Test behavior when no default role is configured"""
+        # Temporarily change configuration to have no default
+        original_default = Role.VIEWER  # Store original
+
+        try:
+            # Reconfigure with no default
+            configure_roles(
+                role_enum=Role,
+                inheritance={
+                    Role.ADMIN: [Role.EDITOR],
+                    Role.EDITOR: [Role.VIEWER],
+                },
+                default_role=None,
+            )
+
+            # Request without user_role
+            request = SimpleNamespace()
+
+            # Get role from request (should return None or empty string)
+            role = get_role_from_request(request)
+
+            # Should be None or empty string when no default
+            assert role in (None, "")
+
+        finally:
+            # Restore original configuration
+            configure_roles(
+                role_enum=Role,
+                inheritance={
+                    Role.ADMIN: [Role.EDITOR],
+                    Role.EDITOR: [Role.VIEWER],
+                },
+                default_role=original_default,
+            )
+
+    def test_with_custom_attribute_name(self):
+        """Test a case where the role attribute has a different name"""
+        # This test demonstrates how the function would need to be modified
+        # to support custom attribute names
+
+        # Create a request with a different attribute name
+        request = SimpleNamespace(auth_role=Role.ADMIN.value)
+
+        # The current implementation will use default since it only
+        # looks for "user_role"
+        role = get_role_from_request(request)
+        assert role == Role.VIEWER.value
+
+        # Example of how it could be modified (not actually changing the implementation)
+        custom_role = getattr(request, "auth_role", Role.VIEWER.value)
+        assert custom_role == Role.ADMIN.value
 
 
 class TestVisibleFields:
