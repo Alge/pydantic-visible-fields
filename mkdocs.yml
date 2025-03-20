@@ -1,0 +1,27 @@
+site_name: Pydantic Visible Fields
+site_description: Field-level visibility control for Pydantic models
+site_author: Martin Alge
+
+theme:
+  name: material
+  palette:
+    primary: indigo
+    accent: indigo
+
+repo_name: Alge/pydantic-visible-fields
+repo_url: https://github.com/Alge/pydantic-visible-fields
+
+nav:
+  - Home: index.md
+  - User Guide: user-guide.md
+  - API Reference: api-reference.md
+  - Examples: examples.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - admonition
+
+plugins:
+  - search
+  - mkdocstrings
