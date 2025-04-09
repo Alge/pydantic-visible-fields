@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pydantic-visible-fields"
-version = "0.1.0"
+version = "0.2.0"
 # Add other project metadata as needed
 
 [tool.black]
