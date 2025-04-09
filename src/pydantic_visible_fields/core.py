@@ -31,8 +31,7 @@ __all__ = [
     "VisibleFieldsMixin",
     "field",
     "configure_roles",
-    "get_role_from_request",
-    "VisibleFieldsResponse",
+    "visible_fields_response",
     "VisibleFieldsModel",
 ]
 
@@ -109,26 +108,10 @@ def configure_roles(
     )
 
 
-def get_role_from_request(request: Any) -> Optional[str]:
-    """
-    Extract the user's role from a request object.
-
-    This is a placeholder function that should be customized based on your
-    authentication system.
-
-    Args:
-        request: The request object.
-
-    Returns:
-        The user's role.
-    """
-    # This is just a placeholder - implement based on your auth system.
-    return getattr(request, "user_role", _DEFAULT_ROLE)
-
-
-def VisibleFieldsResponse(model: Any, role: Any = None) -> Any:
+def visible_fields_response(model: Any, role: Any = None) -> Any:
     """
     Create a response that includes only the fields visible to the specified role.
+    This also handles objects that does not inherit from VisibleFieldsMixin, returning the item as-is
 
     Args:
         model: The model to convert.

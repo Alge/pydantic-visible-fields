@@ -5,3 +5,4 @@ mypy>=0.942
 flake8>=4.0.1
 pip-tools>=6.6.0
 pre-commit>=2.18.0
+bump2version

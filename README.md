@@ -10,6 +10,7 @@ A flexible field-level visibility control system for Pydantic models. This libra
 
 `pydantic-visible-fields` provides a simple way to control which fields of your Pydantic models are visible to different user roles. It is particularly useful for API responses where you want to return different data depending on the user's role.
 
+It also provides a `PaginatedResponse` class which makes it easy to generate paginated user responses with automatic conversion of objects to the correct visibility level.
 ### Key Features
 
 - 🔒 **Field-level visibility control** using a simple decorator
@@ -22,7 +23,7 @@ A flexible field-level visibility control system for Pydantic models. This libra
 ## Installation
 
 ```bash
-pip install pydantic-visible-fields
+pip install git+https://github.com/Alge/pydantic-visible-fields.git
 ```
 
 ## Basic Usage
@@ -78,7 +79,7 @@ In your API handlers, convert models to role-specific responses:
 
 ```python
 from fastapi import Depends
-from pydantic_visible_fields import VisibleFieldsResponse
+from pydantic_visible_fields import visible_fields_response
 
 @app.get("/users/{user_id}")
 async def get_user(user_id: str, current_user = Depends(get_current_user)):
@@ -86,7 +87,7 @@ async def get_user(user_id: str, current_user = Depends(get_current_user)):
 
     # Return different fields based on user's role
     role = get_user_role(current_user)
-    return VisibleFieldsResponse(user, role=role)
+    return visible_fields_response(user, role=role)
 ```
 
 ## Advanced Usage
@@ -166,7 +167,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from typing import List
 
 from pydantic_visible_fields import (
-    VisibleFieldsModel, VisibleFieldsResponse, field, configure_roles
+    VisibleFieldsModel, visible_fields_response, field, configure_roles
 )
 
 # Define roles
@@ -214,14 +215,14 @@ def get_user_role(role_name: str = "public"):
 @app.get("/items/", response_model=List)
 async def get_items(role = Depends(get_user_role)):
     # Convert items to role-specific responses
-    return [VisibleFieldsResponse(item, role=role) for item in items_db]
+    return [visible_fields_response(item, role=role) for item in items_db]
 
 @app.get("/items/{item_id}")
 async def get_item(item_id: int, role = Depends(get_user_role)):
     for item in items_db:
         if item.id == item_id:
             # Return different fields based on user's role
-            return VisibleFieldsResponse(item, role=role)
+            return visible_fields_response(item, role=role)
     raise HTTPException(status_code=404, detail="Item not found")
 ```
 
@@ -231,12 +232,13 @@ async def get_item(item_id: int, role = Depends(get_user_role)):
 
 - `VisibleFieldsModel` - Base model class with field-level visibility control
 - `VisibleFieldsMixin` - Mixin class that can be added to any Pydantic model
+- `PaginatedResponse` - Class for handling pagination, automatically converts models to the correct visibility level
 
 ### Functions
 
 - `field(visible_to=None, **kwargs)` - Field decorator to specify visibility
 - `configure_roles(role_enum, inheritance=None, default_role=None)` - Configure the role system
-- `VisibleFieldsResponse(model, role=None)` - Create a response with only visible fields
+- `visible_fields_response(model, role=None)` - Create a response with only visible fields
 
 ### Methods
 

@@ -10,6 +10,8 @@ black==25.1.0
     # via -r requirements-dev.in
 build==1.2.2.post1
     # via pip-tools
+bump2version==1.0.1
+    # via -r requirements-dev.in
 cfgv==3.4.0
     # via pre-commit
 click==8.1.8

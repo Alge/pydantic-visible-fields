@@ -10,7 +10,7 @@ test-setup:
 	pip install -r requirements-test.txt
 
 test:
-	pytest
+	pytest tests/ -v
 
 lint:
 	flake8 src/pydantic_visible_fields tests
