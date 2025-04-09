@@ -2,6 +2,11 @@
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "pydantic-visible-fields"
+version = "0.1.0"
+# Add other project metadata as needed
+
 [tool.black]
 line-length = 88
 target-version = ['py38']
