@@ -1,4 +1,4 @@
-.PHONY: setup dev test lint format update-deps clean
+.PHONY: setup dev test lint format update-deps build clean
 
 setup:
 	pip install -e ".[dev]"
@@ -24,6 +24,9 @@ update-deps:
 	pip-compile requirements.in --upgrade
 	pip-compile requirements-dev.in --upgrade
 	pip-compile requirements-test.in --upgrade
+
+build:
+	python3 -m build
 
 clean:
 	rm -rf build/ dist/ *.egg-info/ .pytest_cache/ .coverage htmlcov/

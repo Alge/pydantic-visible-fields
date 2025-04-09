@@ -1,20 +1,48 @@
-[build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "pydantic-visible-fields"
 version = "0.2.0"
-# Add other project metadata as needed
+description = "Field-level visibility control for Pydantic models"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Martin Alge", email = "martin@alge.se" }
+]
+requires-python = ">=3.8"
+dependencies = [
+  "pydantic>=2.0.0"
+]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13"
+]
 
-[tool.black]
-line-length = 88
-target-version = ['py38']
+[project.urls]
+"Bug Tracker" = "https://github.com/Alge/pydantic-visible-fields/issues"
+"Documentation" = "https://github.com/Alge/pydantic-visible-fields#readme"
+"Source Code" = "https://github.com/Alge/pydantic-visible-fields"
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
+[tool.setuptools]
+package-dir = {"" = "src"}
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = "test_*.py"
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=6.0",
+  "black>=21.5b2",
+  "isort>=5.0.0",
+  "mypy>=0.812",
+  "flake8>=3.9.2"
+]
+doc = [
+  "mkdocs>=1.1.2",
+  "mkdocs-material>=7.1.5",
+  "mkdocstrings>=0.15.2"
+]
