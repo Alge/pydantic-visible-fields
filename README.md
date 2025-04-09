@@ -246,6 +246,11 @@ async def get_item(item_id: int, role = Depends(get_user_role)):
 - `model.to_response_model(role=None)` - Convert a model to a response model class
 - `Model.configure_visibility(role, visible_fields)` - Configure visibility rules for a role
 
+## Development
+
+### Increasing version numbers
+Use `bump2version` to increase the version number (included in the dev dependencies).
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
