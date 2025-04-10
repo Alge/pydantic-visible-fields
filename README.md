@@ -23,7 +23,7 @@ It also provides a `PaginatedResponse` class which makes it easy to generate pag
 ## Installation
 
 ```bash
-pip install git+https://github.com/Alge/pydantic-visible-fields.git
+pip install pydantic-visible-fields
 ```
 
 ## Basic Usage
