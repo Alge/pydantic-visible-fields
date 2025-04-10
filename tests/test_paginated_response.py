@@ -41,7 +41,7 @@ configure_roles(
 
 
 # Define a test model with field-level visibility
-class TestItem(VisibleFieldsModel):
+class SampleItem(VisibleFieldsModel):
     """Test item with field-level visibility for pagination tests"""
 
     id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
@@ -68,7 +68,7 @@ class NonConvertibleItem(BaseModel):
 def test_items():
     """Create a list of test items"""
     return [
-        TestItem(
+        SampleItem(
             id=f"item-{i}",
             name=f"Item {i}",
             description=f"Description for item {i}",
@@ -121,7 +121,7 @@ class TestPaginatedResponse:
     def test_init(self):
         """Test constructor and basic properties"""
         # Create a simple model to use in the test
-        test_model = TestItem(id="1", name="Test", description="Desc", secret="secret")
+        test_model = SampleItem(id="1", name="Test", description="Desc", secret="secret")
 
         # Create a paginated response directly
         response = PaginatedResponse(
@@ -278,7 +278,7 @@ class TestPaginatedResponse:
         for i, item in enumerate(response.data):
             if i % 2 == 0:  # TestItem positions (0, 2, 4)
                 # These should be converted to response models with VIEWER visibility
-                assert not isinstance(item, TestItem)  # Not the original model
+                assert not isinstance(item, SampleItem)  # Not the original model
                 assert not isinstance(item, dict)  # Not a dict but a model
                 assert hasattr(item, "id")
                 assert hasattr(item, "name")
