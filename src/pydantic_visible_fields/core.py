@@ -45,7 +45,10 @@ def _safe_create_model(
     """
     try:
         field_dict = {k: (v[0], v[1]) for k, v in fields.items()}
-        return create_model(name, **field_dict)  # type: ignore
+        # Only ignore the call-overload error, not all type checking
+        return create_model(  # type: ignore[call-overload,no-any-return]
+            name, **field_dict
+        )
     except Exception as e:
         raise ValueError(f"Failed to create model {name}: {e}")
 
