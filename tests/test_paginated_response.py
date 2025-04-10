@@ -121,7 +121,9 @@ class TestPaginatedResponse:
     def test_init(self):
         """Test constructor and basic properties"""
         # Create a simple model to use in the test
-        test_model = SampleItem(id="1", name="Test", description="Desc", secret="secret")
+        test_model = SampleItem(
+            id="1", name="Test", description="Desc", secret="secret"
+        )
 
         # Create a paginated response directly
         response = PaginatedResponse(
