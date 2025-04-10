@@ -28,6 +28,8 @@ click==8.1.8
     # via
     #   black
     #   pip-tools
+coverage[toml]==7.8.0
+    # via pytest-cov
 cryptography==44.0.2
     # via secretstorage
 distlib==0.3.9
@@ -46,6 +48,8 @@ idna==3.10
     # via requests
 importlib-metadata==8.6.1
     # via keyring
+iniconfig==2.1.0
+    # via pytest
 isort==6.0.1
     # via -r requirements-dev.in
 jaraco-classes==3.4.0
@@ -84,6 +88,7 @@ packaging==24.2
     # via
     #   black
     #   build
+    #   pytest
     #   twine
 pathspec==0.12.1
     # via black
@@ -93,6 +98,8 @@ platformdirs==4.3.7
     # via
     #   black
     #   virtualenv
+pluggy==1.5.0
+    # via pytest
 pre-commit==4.2.0
     # via -r requirements-dev.in
 pycodestyle==2.12.1
@@ -113,6 +120,15 @@ pyproject-hooks==1.2.0
     # via
     #   build
     #   pip-tools
+pytest==8.3.5
+    # via
+    #   -r requirements-dev.in
+    #   pytest-asyncio
+    #   pytest-cov
+pytest-asyncio==0.26.0
+    # via -r requirements-dev.in
+pytest-cov==6.1.1
+    # via -r requirements-dev.in
 pyyaml==6.0.2
     # via pre-commit
 readme-renderer==44.0
