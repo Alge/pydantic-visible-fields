@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-visible-fields"
-version = "0.2.0"
+version = "0.2.1"
 description = "Field-level visibility control for Pydantic models"
 readme = "README.md"
 license = { file = "LICENSE" }
