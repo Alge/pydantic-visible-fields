@@ -33,6 +33,14 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pydantic_visible_fields = ["py.typed"]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
 [project.optional-dependencies]
 dev = [
   "pytest>=6.0",
