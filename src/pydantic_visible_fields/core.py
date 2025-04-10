@@ -26,14 +26,6 @@ from typing import (
 
 from pydantic import BaseModel, Field, create_model
 
-__version__ = "0.1.0"
-__all__ = [
-    "VisibleFieldsMixin",
-    "field",
-    "configure_roles",
-    "visible_fields_response",
-    "VisibleFieldsModel",
-]
 
 # Global role configuration.
 _ROLE_ENUM: Optional[Type[Enum]] = None
@@ -43,6 +35,19 @@ _RESPONSE_MODEL_CACHE: Dict[Tuple[str, str, str], Type[BaseModel]] = {}
 
 T = TypeVar("T", bound=BaseModel)
 ModelT = TypeVar("ModelT", bound="VisibleFieldsModel")
+
+
+def _safe_create_model(
+    name: str, fields: Dict[str, Tuple[Type[Any], Any]]
+) -> Type[BaseModel]:
+    """
+    Safely create a Pydantic model with error handling.
+    """
+    try:
+        field_dict = {k: (v[0], v[1]) for k, v in fields.items()}
+        return create_model(name, **field_dict)  # type: ignore
+    except Exception as e:
+        raise ValueError(f"Failed to create model {name}: {e}")
 
 
 def field(*, visible_to: Optional[List[Any]] = None, **kwargs: Any) -> Any:
@@ -111,7 +116,8 @@ def configure_roles(
 def visible_fields_response(model: Any, role: Any = None) -> Any:
     """
     Create a response that includes only the fields visible to the specified role.
-    This also handles objects that does not inherit from VisibleFieldsMixin, returning the item as-is
+    This also handles objects that does not inherit from VisibleFieldsMixin,
+    returning the item as-is.
 
     Args:
         model: The model to convert.
@@ -309,11 +315,10 @@ class VisibleFieldsMixin:
             processed_data = self._sanitize_dict_for_json(visible_data)
 
         try:
-            # Cast to BaseModel to satisfy type checker.
-            return cast(BaseModel, model_cls.model_construct(**processed_data))
+            return model_cls.model_construct(**processed_data)
         except Exception as _:  # noqa: F841
             try:
-                return cast(BaseModel, model_cls.model_validate(processed_data))
+                return model_cls.model_validate(processed_data)
             except Exception as _:  # noqa: F841
                 try:
                     dynamic_model = self._create_dynamic_model(
@@ -321,11 +326,13 @@ class VisibleFieldsMixin:
                     )
                     return dynamic_model.model_validate(processed_data)
                 except Exception as _:  # noqa: F841
-                    ResponseModel = create_model(
-                        model_name + "Fallback",
-                        **{k: (Any, None) for k in processed_data.keys()},
-                    )  # type: ignore
-                    return cast(BaseModel, ResponseModel.model_validate(processed_data))
+                    # Use a proper type for Any that works in tuples
+                    fields: Dict[str, Tuple[Type[Any], Any]] = {}
+                    for k in processed_data.keys():
+                        # Use type(None) for default of None, and object for the type
+                        fields[k] = (object, None)
+                    ResponseModel = _safe_create_model(model_name + "Fallback", fields)
+                    return ResponseModel.model_validate(processed_data)
 
     def _sanitize_dict_for_json(self, data: Any) -> Any:
         """
@@ -358,17 +365,18 @@ class VisibleFieldsMixin:
     ) -> Type[BaseModel]:
         """Create a dynamic model that exactly matches the structure of the data."""
         model_name = f"{base_name}Dynamic"
-        fields: Dict[str, Tuple[Any, Any]] = {}
+        fields: Dict[str, Tuple[Type[Any], Any]] = {}
         for key, value in data.items():
             if isinstance(value, dict):
-                fields[key] = (Dict[str, Any], Field(default_factory=dict))
+                fields[key] = (Dict[str, Any], Field(default_factory=lambda: {}))
             elif isinstance(value, list):
-                fields[key] = (List[Any], Field(default_factory=list))
+                fields[key] = (List[Any], Field(default_factory=lambda: []))
             elif value is None:
-                fields[key] = (Optional[Any], None)
+                # Use object instead of Any to fix the type error
+                fields[key] = (object, None)
             else:
                 fields[key] = (type(value), Field(default=None))
-        return create_model(model_name, **fields)  # type: ignore
+        return _safe_create_model(model_name, fields)
 
     @classmethod
     def create_response_model(

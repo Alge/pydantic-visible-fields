@@ -3,9 +3,9 @@
 from pydantic_visible_fields.core import (
     VisibleFieldsMixin,
     VisibleFieldsModel,
-    visible_fields_response,
     configure_roles,
     field,
+    visible_fields_response,
 )
 
 __version__ = "0.2.0"

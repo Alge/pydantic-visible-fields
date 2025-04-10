@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, AsyncIterable, Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict
-from typing import List, AsyncIterable, Generic, TypeVar, Optional, Any
 
 from pydantic_visible_fields.core import _DEFAULT_ROLE
 
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
+
 
 class PaginatedResponse(BaseModel, Generic[T]):
     """
@@ -23,6 +24,7 @@ class PaginatedResponse(BaseModel, Generic[T]):
         has_more: Boolean indicating whether more items exist.
         next_offset: Offset value for the next page or 0 if none.
     """
+
     data: List[T]
     limit: int
     offset: int
@@ -34,10 +36,10 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 
 async def from_async_iterable(
-        iterator: AsyncIterable[T],
-        limit: int,
-        offset: int,
-        role: Optional[str] = None,
+    iterator: AsyncIterable[T],
+    limit: int,
+    offset: int,
+    role: Optional[str] = None,
 ) -> PaginatedResponse[Any]:
     """
     Process an async iterable into a paginated response, converting each item
@@ -47,7 +49,8 @@ async def from_async_iterable(
     The offset parameter is only used for informational purposes in the response.
 
     Args:
-        iterator: The async iterable containing the source data objects (should already be at the correct offset)
+        iterator: The async iterable containing the source data objects (should
+        already be at the correct offset)
         limit: Maximum number of items per page
         offset: Starting position for this page (for information only)
         role: The role to determine field visibility
@@ -69,7 +72,7 @@ async def from_async_iterable(
             data=[],
             items=0,
             has_more=False,
-            next_offset=offset + limit,  # Still calculate next_offset even with limit <= 0
+            next_offset=offset + limit,
         )
 
     async for item in iterator:
@@ -106,10 +109,10 @@ async def from_async_iterable(
 
 
 def from_iterable(
-        iterator: List[T],
-        limit: int,
-        offset: int,
-        role: Optional[str] = None,
+    iterator: List[T],
+    limit: int,
+    offset: int,
+    role: Optional[str] = None,
 ) -> PaginatedResponse[Any]:
     """
     Process a synchronous iterable into a paginated response, converting each item
@@ -140,7 +143,7 @@ def from_iterable(
             data=[],
             items=0,
             has_more=False,
-            next_offset=offset + limit,  # Still calculate next_offset even with limit <= 0
+            next_offset=offset + limit,
         )
 
     # Process items up to the limit

@@ -1,21 +1,24 @@
 """
 Tests for the PaginatedResponse class.
 
-This file contains tests for the PaginatedResponse class from the pydantic_visible_fields library,
+This file contains tests for the PaginatedResponse class from the
+pydantic_visible_fields library,
+
 including tests for async and sync iterables, role-based visibility, and edge cases.
 """
 
 import asyncio
-import pytest
 from enum import Enum
-from typing import List, AsyncIterable, Any
+from typing import Any, AsyncIterable, List
 
+import pytest
 from pydantic import BaseModel
-from pydantic_visible_fields import (
-    VisibleFieldsModel, field, configure_roles
-)
+
+from pydantic_visible_fields import VisibleFieldsModel, configure_roles, field
 from pydantic_visible_fields.paginatedresponse import (
-    PaginatedResponse, from_iterable, from_async_iterable
+    PaginatedResponse,
+    from_async_iterable,
+    from_iterable,
 )
 
 
@@ -60,6 +63,7 @@ class NonConvertibleItem(BaseModel):
 # Fixtures
 # --------
 
+
 @pytest.fixture
 def test_items():
     """Create a list of test items"""
@@ -68,7 +72,7 @@ def test_items():
             id=f"item-{i}",
             name=f"Item {i}",
             description=f"Description for item {i}",
-            secret=f"secret-{i}"
+            secret=f"secret-{i}",
         )
         for i in range(1, 11)  # Create 10 items
     ]
@@ -82,7 +86,7 @@ def non_convertible_items():
             id=f"nc-item-{i}",
             name=f"NC Item {i}",
             description=f"NC Description for item {i}",
-            secret=f"nc-secret-{i}"
+            secret=f"nc-secret-{i}",
         )
         for i in range(1, 11)  # Create 10 items
     ]
@@ -110,6 +114,7 @@ async def async_item_generator(items: List[Any]) -> AsyncIterable[Any]:
 # Test cases
 # ----------
 
+
 class TestPaginatedResponse:
     """Tests for the PaginatedResponse class"""
 
@@ -125,7 +130,7 @@ class TestPaginatedResponse:
             offset=0,
             items=1,
             has_more=False,
-            next_offset=0  # Use the value we construct with
+            next_offset=0,  # Use the value we construct with
         )
 
         assert response.limit == 10
@@ -213,7 +218,9 @@ class TestPaginatedResponse:
     def test_role_based_visibility(self, test_items):
         """Test role-based visibility in paginated responses"""
         # VIEWER role should see only id and name
-        viewer_response = from_iterable(test_items[:5], limit=5, offset=0, role=Role.VIEWER.value)
+        viewer_response = from_iterable(
+            test_items[:5], limit=5, offset=0, role=Role.VIEWER.value
+        )
 
         assert len(viewer_response.data) == 5
         for item in viewer_response.data:
@@ -223,7 +230,9 @@ class TestPaginatedResponse:
             assert not hasattr(item, "secret")
 
         # EDITOR role should see id, name, and description
-        editor_response = from_iterable(test_items[:5], limit=5, offset=0, role=Role.EDITOR.value)
+        editor_response = from_iterable(
+            test_items[:5], limit=5, offset=0, role=Role.EDITOR.value
+        )
 
         assert len(editor_response.data) == 5
         for item in editor_response.data:
@@ -233,7 +242,9 @@ class TestPaginatedResponse:
             assert not hasattr(item, "secret")
 
         # ADMIN role should see all fields
-        admin_response = from_iterable(test_items[:5], limit=5, offset=0, role=Role.ADMIN.value)
+        admin_response = from_iterable(
+            test_items[:5], limit=5, offset=0, role=Role.ADMIN.value
+        )
 
         assert len(admin_response.data) == 5
         for item in admin_response.data:
@@ -257,7 +268,9 @@ class TestPaginatedResponse:
 
     def test_mixed_items(self, mixed_items):
         """Test pagination with a mix of convertible and non-convertible items"""
-        response = from_iterable(mixed_items[:5], limit=5, offset=0, role=Role.VIEWER.value)
+        response = from_iterable(
+            mixed_items[:5], limit=5, offset=0, role=Role.VIEWER.value
+        )
 
         assert len(response.data) == 5
 
@@ -313,7 +326,7 @@ class TestPaginatedResponse:
             async_item_generator(test_items[:10]),
             limit=10,
             offset=0,
-            role=Role.VIEWER.value
+            role=Role.VIEWER.value,
         )
 
         assert len(viewer_response.data) == 10
@@ -328,7 +341,7 @@ class TestPaginatedResponse:
             async_item_generator(test_items[:10]),
             limit=10,
             offset=0,
-            role=Role.ADMIN.value
+            role=Role.ADMIN.value,
         )
 
         assert len(admin_response.data) == 10
@@ -340,7 +353,9 @@ class TestPaginatedResponse:
 
     async def test_async_empty(self):
         """Test async pagination with an empty list"""
-        response = await from_async_iterable(async_item_generator([]), limit=5, offset=0)
+        response = await from_async_iterable(
+            async_item_generator([]), limit=5, offset=0
+        )
 
         assert response.limit == 5
         assert response.offset == 0
@@ -450,7 +465,7 @@ class TestPaginatedResponse:
             offset=1,
             items=len(data),
             has_more=True,  # Manually setting has_more
-            next_offset=4  # Manually calculate next_offset
+            next_offset=4,  # Manually calculate next_offset
         )
 
         # Should include first 3 items
@@ -468,7 +483,7 @@ class TestPaginatedResponse:
             offset=4,
             items=len(data),
             has_more=True,  # Manually setting has_more
-            next_offset=7  # Manually calculate next_offset
+            next_offset=7,  # Manually calculate next_offset
         )
 
         # Should include 3 more items
@@ -484,7 +499,7 @@ class TestPaginatedResponse:
             offset=7,
             items=len(data),
             has_more=False,  # Manually setting has_more
-            next_offset=10  # Manually calculate next_offset
+            next_offset=10,  # Manually calculate next_offset
         )
 
         # Should include the last item
@@ -543,19 +558,23 @@ class TestPaginatedResponse:
 
         class TestWithNested(VisibleFieldsModel):
             id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
-            nested: NestedField = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
+            nested: NestedField = field(
+                visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN]
+            )
 
         # Create test data
         nested_items = [
             TestWithNested(
                 id=f"nested-{i}",
-                nested=NestedField(value=f"value-{i}", secret=f"secret-{i}")
+                nested=NestedField(value=f"value-{i}", secret=f"secret-{i}"),
             )
             for i in range(1, 4)
         ]
 
         # Test with VIEWER role
-        response = from_iterable(nested_items, limit=3, offset=0, role=Role.VIEWER.value)
+        response = from_iterable(
+            nested_items, limit=3, offset=0, role=Role.VIEWER.value
+        )
 
         assert len(response.data) == 3
         for item in response.data:
