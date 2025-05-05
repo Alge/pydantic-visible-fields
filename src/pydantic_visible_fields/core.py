@@ -25,7 +25,7 @@ from typing import (
 )
 
 from pydantic import BaseModel, Field, create_model
-
+from pydantic_core import PydanticUndefined
 
 # Global role configuration.
 _ROLE_ENUM: Optional[Type[Enum]] = None
@@ -184,7 +184,6 @@ class VisibleFieldsMixin:
         obj_id = id(self)
         if obj_id in visited:
             if depth > 1:
-                # Rename temporary variable to avoid duplicate definition.
                 cycle_result = visited[obj_id].copy()
                 cycle_result["__cycle_reference__"] = True
                 return cycle_result
@@ -383,48 +382,69 @@ class VisibleFieldsMixin:
 
     @classmethod
     def create_response_model(
-        cls, role: str, model_name_suffix: str = "Response"
+            cls, role: str, model_name_suffix: str = "Response"
     ) -> Type[BaseModel]:
         """
         Create a Pydantic model with only the fields visible to the specified
-        role.
+        role. This version avoids modifying the original model's FieldInfo.
         """
         cache_key = (cls.__name__, role, model_name_suffix)
         if cache_key in _RESPONSE_MODEL_CACHE:
             return _RESPONSE_MODEL_CACHE[cache_key]
 
         visible_fields = cls._get_all_visible_fields(role)
-        fields: Dict[str, Tuple[Any, Any]] = {}
+        new_fields_definition: Dict[str, Tuple[Any, Any]] = {}
+
         for field_name in visible_fields:
-            # Use the declared model_fields attribute.
             if field_name not in cls.model_fields:
                 continue
 
-            field_info = cls.model_fields[field_name]
-            annotation = field_info.annotation
-            origin = get_origin(annotation)
+            original_field_info = cls.model_fields[field_name]
+            original_annotation = original_field_info.annotation
 
-            if origin is Union:
-                fields[field_name] = (Dict[str, Any], field_info)
-            elif origin is list or origin is List:
-                fields[field_name] = (List[Any], field_info)
-            elif origin is dict or origin is Dict:
-                fields[field_name] = (Dict[str, Any], field_info)
-            elif isinstance(annotation, type) and issubclass(annotation, BaseModel):
-                fields[field_name] = (Dict[str, Any], field_info)
-            else:
-                fields[field_name] = (annotation, field_info)
+            new_field_kwargs = {}
 
-        if role == _DEFAULT_ROLE:
+            if original_field_info.description:
+                new_field_kwargs['description'] = original_field_info.description
+            if original_field_info.title:
+                new_field_kwargs['title'] = original_field_info.title
+            if original_field_info.alias and original_field_info.alias != field_name:
+                new_field_kwargs['alias'] = original_field_info.alias
+            if original_field_info.examples:
+                new_field_kwargs['examples'] = original_field_info.examples
+            if original_field_info.metadata:
+                for meta_key in ['ge', 'gt', 'le', 'lt', 'multiple_of', 'min_length',
+                                 'max_length', 'pattern']:
+                    if hasattr(original_field_info, meta_key):
+                        meta_value = getattr(original_field_info, meta_key)
+                        if meta_value is not None and meta_value is not PydanticUndefined:
+                            new_field_kwargs[meta_key] = meta_value
+
+            if original_field_info.default is not PydanticUndefined:
+                new_field_kwargs['default'] = original_field_info.default
+            elif original_field_info.default_factory is not None:
+                new_field_kwargs[
+                    'default_factory'] = original_field_info.default_factory
+
+            new_field = Field(**new_field_kwargs)
+
+            new_fields_definition[field_name] = (original_annotation, new_field)
+
+        if _DEFAULT_ROLE is not None and role == _DEFAULT_ROLE:
             model_name = f"{cls.__name__}{model_name_suffix}"
         else:
             model_name = f"{cls.__name__}{role.capitalize()}{model_name_suffix}"
 
-        response_model = create_model(model_name, **fields)  # type: ignore
-        setattr(response_model, "model_config", {"extra": "ignore"})
+        response_model = create_model(
+            model_name,
+            __config__=dict(extra='ignore'),
+            **new_fields_definition
+        )
 
-        _RESPONSE_MODEL_CACHE[cache_key] = response_model
-        return cast(Type[BaseModel], response_model)
+        typed_response_model = cast(Type[BaseModel], response_model)
+
+        _RESPONSE_MODEL_CACHE[cache_key] = typed_response_model
+        return typed_response_model
 
     @classmethod
     def configure_visibility(cls, role: str, visible_fields: Set[str]) -> None:
