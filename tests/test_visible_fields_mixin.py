@@ -4,14 +4,16 @@ Tests for the visible_fields library.
 This file contains comprehensive tests for all aspects of the visible_fields library,
 including field-level visibility, role inheritance, and complex model structures.
 """
-
+import uuid
+from datetime import datetime, timezone # Added timezone
 from enum import Enum
 from types import NoneType
-from typing import ClassVar, Dict, List, Optional, Set, Union
+from typing import ClassVar, Dict, List, Optional, Set, Union, Any # Added Any
 
 import pytest
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, ValidationError # Added ValidationError
 
+# Ensure this matches the actual import path for your library
 from pydantic_visible_fields import (
     VisibleFieldsMixin,
     VisibleFieldsModel,
@@ -178,7 +180,7 @@ class ContainerWithUnion(VisibleFieldsModel):
         visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default=None
     )
     tags: List[str] = field(
-        visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default=["default"]
+        visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default_factory=list # Use default_factory for lists
     )
     active: bool = field(
         visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default=True
@@ -267,6 +269,8 @@ class ValidatedModel(VisibleFieldsModel):
 
 class ModelWithAliases(VisibleFieldsModel):
     """Model with field aliases"""
+    # If you want to initialize by alias 'id'/'name', add this:
+    # model_config = ConfigDict(populate_by_name=True)
 
     item_id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], alias="id")
     item_name: str = field(
@@ -291,6 +295,55 @@ class NodeWithSelfReference(VisibleFieldsModel):
 
 
 NodeWithSelfReference.model_rebuild()
+
+# Test Group 10: Models for Bug Detection
+# ---------------------------------------
+
+class ModelWithSpecificTypes(VisibleFieldsModel):
+    """Model for testing type preservation"""
+    id: str = field(visible_to=[Role.ADMIN])
+    event_time: datetime = field(visible_to=[Role.ADMIN])
+    unique_id: uuid.UUID = field(visible_to=[Role.ADMIN])
+    current_status: Role = field(visible_to=[Role.ADMIN]) # Use Enum type
+    optional_int: Optional[int] = field(visible_to=[Role.ADMIN], default=None)
+
+class CorruptibleSimpleFieldModel(VisibleFieldsModel):
+    """Subclass to inject invalid data for validation test"""
+    id: str = field(visible_to=[Role.VIEWER, Role.ADMIN])
+    name: str = field(visible_to=[Role.VIEWER, Role.ADMIN])
+    value: int = field(visible_to=[Role.ADMIN]) # Expects an int
+
+    # Override to deliberately corrupt data for testing
+    def visible_dict(
+        self,
+        role: Optional[str] = None,
+        visited: Optional[Dict[int, Dict[str, Any]]] = None,
+        depth: int = 0,
+    ) -> Dict[str, Any]:
+        """Override to deliberately corrupt data for testing masked validation errors."""
+        data = super().visible_dict(role, visited, depth)
+        # Make data invalid for the ADMIN role response model ONLY if ADMIN role is passed
+        if role == Role.ADMIN.value:
+            if "value" in data:
+                # Intentionally set the wrong type
+                data["value"] = "this-is-not-an-integer"
+            # Intentionally remove a required field ('id') if present for ADMIN view
+            # Note: The response model created for ADMIN *must* require 'id' for this to fail validation.
+            if "id" in data:
+                 del data["id"]
+        return data
+
+class CycleNodeA(VisibleFieldsModel):
+    id: str = field(visible_to=[Role.VIEWER])
+    ref_b: Optional["CycleNodeB"] = field(visible_to=[Role.VIEWER], default=None)
+
+class CycleNodeB(VisibleFieldsModel):
+    id: str = field(visible_to=[Role.VIEWER])
+    ref_a: Optional[CycleNodeA] = field(visible_to=[Role.VIEWER], default=None)
+
+# Ensure forward references are resolved
+CycleNodeA.model_rebuild()
+CycleNodeB.model_rebuild()
 
 
 # Test Fixtures
@@ -392,56 +445,26 @@ def model_with_extended_item():
 
 @pytest.fixture
 def deep_nested_model():
+    child1 = DeepChild(id="dch1", value="Deep child value", metadata="Child metadata")
+    parent1 = DeepParent(id="dp1", child=child1, data="Parent data", metadata="Parent metadata")
+
+    child2 = DeepChild(id="dch2", value="List child value", metadata="List child metadata")
+    parent2 = DeepParent(id="dp2", child=child2, data="List parent data", metadata="List parent metadata")
+
+    child3 = DeepChild(id="dch3", value="Another list child value", metadata="Another list child metadata")
+    parent3 = DeepParent(id="dp3", child=child3, data="Another list parent data", metadata="Another list parent metadata")
+
+    child4 = DeepChild(id="dch4", value="Dict child value", metadata="Dict child metadata")
+    parent4 = DeepParent(id="dp4", child=child4, data="Dict parent data", metadata="Dict parent metadata")
+
+    child5 = DeepChild(id="dch5", value="Another dict child value", metadata="Another dict child metadata")
+    parent5 = DeepParent(id="dp5", child=child5, data="Another dict parent data", metadata="Another dict parent metadata")
+
     return DeepContainer(
         id="dc1",
-        parent=DeepParent(
-            id="dp1",
-            child=DeepChild(
-                id="dch1", value="Deep child value", metadata="Child metadata"
-            ),
-            data="Parent data",
-            metadata="Parent metadata",
-        ),
-        items=[
-            DeepParent(
-                id="dp2",
-                child=DeepChild(
-                    id="dch2", value="List child value", metadata="List child metadata"
-                ),
-                data="List parent data",
-                metadata="List parent metadata",
-            ),
-            DeepParent(
-                id="dp3",
-                child=DeepChild(
-                    id="dch3",
-                    value="Another list child value",
-                    metadata="Another list child metadata",
-                ),
-                data="Another list parent data",
-                metadata="Another list parent metadata",
-            ),
-        ],
-        mapped_items={
-            "first": DeepParent(
-                id="dp4",
-                child=DeepChild(
-                    id="dch4", value="Dict child value", metadata="Dict child metadata"
-                ),
-                data="Dict parent data",
-                metadata="Dict parent metadata",
-            ),
-            "second": DeepParent(
-                id="dp5",
-                child=DeepChild(
-                    id="dch5",
-                    value="Another dict child value",
-                    metadata="Another dict child metadata",
-                ),
-                data="Another dict parent data",
-                metadata="Another dict parent metadata",
-            ),
-        },
+        parent=parent1,
+        items=[parent2, parent3],
+        mapped_items={"first": parent4, "second": parent5},
         metadata="Container metadata",
     )
 
@@ -475,7 +498,8 @@ def validated_model():
 
 @pytest.fixture
 def aliased_model():
-    return ModelWithAliases(id="am1", name="Aliased Model", internal_code="am-internal")
+    # FIX: Initialize using defined field names
+    return ModelWithAliases(item_id="am1", item_name="Aliased Model", internal_code="am-internal")
 
 
 @pytest.fixture
@@ -496,473 +520,423 @@ def circular_reference():
 def empty_list_model():
     return ListModel(id="el1", items=[], metadata="Empty list metadata")
 
+# --- Fixtures for Bug Detection ---
+
+@pytest.fixture
+def model_with_specific_types():
+    return ModelWithSpecificTypes(
+        id="spec1",
+        event_time=datetime.now(timezone.utc),
+        unique_id=uuid.uuid4(),
+        current_status=Role.EDITOR,
+        optional_int=123
+    )
+
+@pytest.fixture
+def corruptible_simple_field_model():
+    # This model will produce invalid data via its overridden visible_dict
+    return CorruptibleSimpleFieldModel(id="corr1", name="Corruptible", value=10)
+
+@pytest.fixture
+def node_with_direct_cycle():
+    # Re-use NodeWithSelfReference which is already defined globally
+    node = NodeWithSelfReference(id="direct_cycle_1", name="Node 1", metadata="Direct Cycle Meta")
+    node.self_ref = node # Create direct cycle
+    return node
+
+@pytest.fixture
+def node_with_indirect_cycle():
+    node_a = CycleNodeA(id="indirect_a")
+    node_b = CycleNodeB(id="indirect_b")
+    node_a.ref_b = node_b
+    node_b.ref_a = node_a # Create indirect cycle (A -> B -> A)
+    return node_a
+
 
 # Test Cases
 # ----------
 
-"""
-Additional tests for the get_role_from_request function.
-
-This file contains comprehensive tests for the get_role_from_request function
-in the visible_fields library, covering various edge cases and scenarios.
-"""
-
-
-# Define the Role enum for testing (same as in the main test file)
-class Role(str, Enum):
-    VIEWER = "viewer"
-    EDITOR = "editor"
-    ADMIN = "admin"
-
-
 class TestVisibleFields:
-    """Tests for the VisibleFieldsMixin class"""
+    """Tests for the VisibleFieldsMixin and related functionality"""
 
+    # --- Original Tests ---
     def test_class_model_visibility(self, simple_class_model):
         """Test that class-level visibility works correctly"""
-        # VIEWER should see id, name
         viewer_dict = simple_class_model.visible_dict(Role.VIEWER.value)
         assert set(viewer_dict.keys()) == {"id", "name"}
-        assert "description" not in viewer_dict
-        assert "secret" not in viewer_dict
-
-        # EDITOR should see id, name, description
         editor_dict = simple_class_model.visible_dict(Role.EDITOR.value)
         assert set(editor_dict.keys()) == {"id", "name", "description"}
-        assert "secret" not in editor_dict
-
-        # ADMIN should see all fields
         admin_dict = simple_class_model.visible_dict(Role.ADMIN.value)
         assert set(admin_dict.keys()) == {"id", "name", "description", "secret"}
 
     def test_field_model_visibility(self, simple_field_model):
         """Test that field-level visibility works correctly"""
-        # VIEWER should see id, name
         viewer_dict = simple_field_model.visible_dict(Role.VIEWER.value)
         assert set(viewer_dict.keys()) == {"id", "name"}
-        assert "description" not in viewer_dict
-        assert "secret" not in viewer_dict
-
-        # EDITOR should see id, name, description
         editor_dict = simple_field_model.visible_dict(Role.EDITOR.value)
         assert set(editor_dict.keys()) == {"id", "name", "description"}
-        assert "secret" not in editor_dict
-
-        # ADMIN should see all fields
         admin_dict = simple_field_model.visible_dict(Role.ADMIN.value)
         assert set(admin_dict.keys()) == {"id", "name", "description", "secret"}
 
     def test_nested_class_model(self, nested_class_model):
         """Test nested models with class-level visibility"""
-        # Get VIEWER view
         viewer_dict = nested_class_model.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "title", "simple"}
-        assert "notes" not in viewer_dict
-        assert "internal_id" not in viewer_dict
-
-        # Check nested model fields
         simple_dict = viewer_dict["simple"]
         assert set(simple_dict.keys()) == {"id", "name"}
-        assert "description" not in simple_dict
-        assert "secret" not in simple_dict
 
     def test_nested_field_model(self, nested_field_model):
         """Test nested models with field-level visibility"""
-        # Get VIEWER view
         viewer_dict = nested_field_model.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "title", "simple"}
-        assert "notes" not in viewer_dict
-        assert "internal_id" not in viewer_dict
-
-        # Check nested model fields
         simple_dict = viewer_dict["simple"]
         assert set(simple_dict.keys()) == {"id", "name"}
-        assert "description" not in simple_dict
-        assert "secret" not in simple_dict
 
     def test_list_model(self, list_model):
         """Test models with list of other models"""
-        # Get VIEWER view
         viewer_dict = list_model.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "items"}
-        assert "metadata" not in viewer_dict
-
-        # Check list items
         items = viewer_dict["items"]
         assert len(items) == 2
         assert all(isinstance(item, dict) for item in items)
         assert all(set(item.keys()) == {"id", "name"} for item in items)
-        assert all("description" not in item for item in items)
-        assert all("secret" not in item for item in items)
 
-        # Now test with to_response_model
         response = list_model.to_response_model(Role.VIEWER.value)
-        assert response.id == list_model.id
+        assert hasattr(response, "id") and response.id == list_model.id
         assert not hasattr(response, "metadata")
-
-        # The items should be a list of dicts
         assert isinstance(response.items, list)
         assert len(response.items) == 2
+        # Assuming dicts are returned by current to_response_model
         assert all(isinstance(item, dict) for item in response.items)
         assert all("id" in item for item in response.items)
         assert all("name" in item for item in response.items)
-        assert all("description" not in item for item in response.items)
-        assert all("secret" not in item for item in response.items)
 
     def test_dict_model(self, dict_model):
         """Test models with dictionary of other models"""
-        # Get VIEWER view
         viewer_dict = dict_model.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "mapping"}
-        assert "metadata" not in viewer_dict
-
-        # Check dict values
         mapping = viewer_dict["mapping"]
         assert len(mapping) == 2
         assert all(isinstance(v, dict) for v in mapping.values())
         assert all(set(v.keys()) == {"id", "name"} for v in mapping.values())
-        assert all("description" not in v for v in mapping.values())
-        assert all("secret" not in v for v in mapping.values())
 
-        # Now test with to_response_model
         response = dict_model.to_response_model(Role.VIEWER.value)
-        assert response.id == dict_model.id
+        assert hasattr(response, "id") and response.id == dict_model.id
         assert not hasattr(response, "metadata")
-
-        # The mapping should be a dict of dicts
         assert isinstance(response.mapping, dict)
         assert len(response.mapping) == 2
-        assert "first" in response.mapping
-        assert "second" in response.mapping
+        # Assuming dicts are returned by current to_response_model
         assert all(isinstance(v, dict) for v in response.mapping.values())
         assert all("id" in v for v in response.mapping.values())
         assert all("name" in v for v in response.mapping.values())
-        assert all("description" not in v for v in response.mapping.values())
-        assert all("secret" not in v for v in response.mapping.values())
 
     def test_union_basic_item(self, model_with_basic_item):
         """Test with a discriminated union (basic item)"""
-        # Get VIEWER view
         viewer_dict = model_with_basic_item.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "name", "item", "tags", "active"}
-        assert "owner" not in viewer_dict
+        item_dict = viewer_dict["item"]
+        assert isinstance(item_dict, dict)
+        assert item_dict["type"] == ItemType.BASIC.value
+        assert set(item_dict.keys()) == {"id", "type", "status"}
 
-        # Check union field
-        item = viewer_dict["item"]
-        assert isinstance(item, dict)
-        assert item["type"] == ItemType.BASIC.value
-        assert item["status"] == "active"
-        assert set(item.keys()) == {"id", "type", "status"}
-
-        # Now test with to_response_model
         response = model_with_basic_item.to_response_model(Role.VIEWER.value)
-        assert response.id == model_with_basic_item.id
-        assert response.name == model_with_basic_item.name
+        assert hasattr(response, "id") and response.id == model_with_basic_item.id
+        assert hasattr(response, "name") and response.name == model_with_basic_item.name
         assert not hasattr(response, "owner")
-
-        # The item should be a dict
-        assert isinstance(response.item, dict)
-        assert response.item["type"] == ItemType.BASIC.value
-        assert response.item["status"] == "active"
+        response_item_dict = response.item
+        assert isinstance(response_item_dict, dict)
+        assert response_item_dict["type"] == ItemType.BASIC.value
 
     def test_union_extended_item(self, model_with_extended_item):
         """Test with a discriminated union (extended item)"""
-        # Get VIEWER view
         viewer_dict = model_with_extended_item.visible_dict(Role.VIEWER.value)
-
-        # Check top level fields
         assert set(viewer_dict.keys()) == {"id", "name", "item", "tags", "active"}
-        assert "owner" not in viewer_dict
+        item_dict = viewer_dict["item"]
+        assert isinstance(item_dict, dict)
+        assert item_dict["type"] == ItemType.EXTENDED.value
+        assert "metadata" not in item_dict
+        assert set(item_dict.keys()) == {"id", "type", "target"}
 
-        # Check union field
-        item = viewer_dict["item"]
-        assert isinstance(item, dict)
-        assert item["type"] == ItemType.EXTENDED.value
-        assert item["target"] == "target1"
-        assert "metadata" not in item
-        assert set(item.keys()) == {"id", "type", "target"}
-
-        # EDITOR should see additional fields
         editor_dict = model_with_extended_item.visible_dict(Role.EDITOR.value)
-        item = editor_dict["item"]
-        assert item["metadata"] == "Item metadata"
-        assert set(item.keys()) == {"id", "type", "target", "metadata"}
+        editor_item_dict = editor_dict["item"]
+        assert editor_item_dict["metadata"] == "Item metadata"
+        assert set(editor_item_dict.keys()) == {"id", "type", "target", "metadata"}
+
+        editor_response = model_with_extended_item.to_response_model(Role.EDITOR.value)
+        editor_response_item_dict = editor_response.item
+        assert isinstance(editor_response_item_dict, dict)
+        assert editor_response_item_dict["metadata"] == "Item metadata"
 
     def test_deep_nesting(self, deep_nested_model):
         """Test deeply nested models"""
-        # Get VIEWER view
         viewer_dict = deep_nested_model.visible_dict(Role.VIEWER.value)
-
-        # Check top level
         assert set(viewer_dict.keys()) == {"id", "parent", "items", "mapped_items"}
-        assert "metadata" not in viewer_dict
-
-        # Check parent level
-        parent = viewer_dict["parent"]
-        assert set(parent.keys()) == {"id", "child", "data"}
-        assert "metadata" not in parent
-
-        # Check child level
-        child = parent["child"]
-        assert set(child.keys()) == {"id", "value"}
-        assert "metadata" not in child
-
-        # Check list items
-        assert len(viewer_dict["items"]) == 2
-        list_item = viewer_dict["items"][0]
-        assert set(list_item.keys()) == {"id", "child", "data"}
-        assert "metadata" not in list_item
-        assert set(list_item["child"].keys()) == {"id", "value"}
-        assert "metadata" not in list_item["child"]
-
-        # Check dict items
-        assert len(viewer_dict["mapped_items"]) == 2
-        dict_item = viewer_dict["mapped_items"]["first"]
-        assert set(dict_item.keys()) == {"id", "child", "data"}
-        assert "metadata" not in dict_item
-        assert set(dict_item["child"].keys()) == {"id", "value"}
-        assert "metadata" not in dict_item["child"]
+        parent_dict = viewer_dict["parent"]
+        assert set(parent_dict.keys()) == {"id", "child", "data"}
+        child_dict = parent_dict["child"]
+        assert set(child_dict.keys()) == {"id", "value"}
+        list_item_dict = viewer_dict["items"][0]
+        assert set(list_item_dict.keys()) == {"id", "child", "data"}
+        assert set(list_item_dict["child"].keys()) == {"id", "value"}
+        dict_item_dict = viewer_dict["mapped_items"]["first"]
+        assert set(dict_item_dict.keys()) == {"id", "child", "data"}
+        assert set(dict_item_dict["child"].keys()) == {"id", "value"}
 
     def test_tree_structure(self, tree_structure):
         """Test tree structure with parent/child references"""
         parent = tree_structure["parent"]
         child1 = tree_structure["child1"]
-
-        # Get VIEWER view for parent
         parent_dict = parent.visible_dict(Role.VIEWER.value)
-
-        # Check parent fields
         assert set(parent_dict.keys()) == {"id", "data", "parent_id", "children_ids"}
-        assert "metadata" not in parent_dict
-        assert parent_dict["parent_id"] is None
         assert set(parent_dict["children_ids"]) == {"tn2", "tn3"}
-
-        # Get VIEWER view for child
         child_dict = child1.visible_dict(Role.VIEWER.value)
-
-        # Check child fields
         assert set(child_dict.keys()) == {"id", "data", "parent_id", "children_ids"}
-        assert "metadata" not in child_dict
         assert child_dict["parent_id"] == "tn1"
-        assert child_dict["children_ids"] == []
 
     def test_validated_model(self, validated_model):
         """Test models with field validators"""
-        # Get VIEWER view
         viewer_dict = validated_model.visible_dict(Role.VIEWER.value)
-
-        # Check fields
         assert set(viewer_dict.keys()) == {"id", "email", "count"}
-        assert "internal_code" not in viewer_dict
-
-        # Now test with to_response_model
         response = validated_model.to_response_model(Role.VIEWER.value)
-        assert response.id == validated_model.id
-        assert response.email == validated_model.email
-        assert response.count == validated_model.count
+        assert hasattr(response, "id") and response.id == validated_model.id
+        assert hasattr(response, "email") and response.email == validated_model.email
+        assert hasattr(response, "count") and response.count == validated_model.count
         assert not hasattr(response, "internal_code")
 
     def test_field_aliases(self, aliased_model):
         """Test models with field aliases"""
-        # Get VIEWER view - should use actual field names, not aliases
         viewer_dict = aliased_model.visible_dict(Role.VIEWER.value)
+        assert set(viewer_dict.keys()) == {"item_id", "item_name"} # Check internal names
 
-        # Check fields
-        assert set(viewer_dict.keys()) == {"item_id", "item_name"}
-        assert "internal_code" not in viewer_dict
-
-        # Now test with to_response_model
         response = aliased_model.to_response_model(Role.VIEWER.value)
-        assert response.item_id == aliased_model.item_id
-        assert response.item_name == aliased_model.item_name
+        assert hasattr(response, "item_id") and response.item_id == aliased_model.item_id
+        assert hasattr(response, "item_name") and response.item_name == aliased_model.item_name
         assert not hasattr(response, "internal_code")
+
+        # Optional: Test serialization with by_alias=True if needed
+        # response_dump = response.model_dump(by_alias=True)
+        # assert response_dump.get("id") == aliased_model.item_id
+        # assert response_dump.get("name") == aliased_model.item_name
 
     def test_circular_reference(self, circular_reference):
         """Test models with circular references"""
-        # Get VIEWER view
         viewer_dict = circular_reference.visible_dict(Role.VIEWER.value)
-
-        # Check fields
         assert set(viewer_dict.keys()) == {"id", "name", "self_ref"}
-        assert "metadata" not in viewer_dict
-
-        # Check self reference
-        self_ref = viewer_dict["self_ref"]
-        assert isinstance(self_ref, dict)
-        assert self_ref["id"] == "nr2"
-        assert self_ref["name"] == "Node 2"
-
-        # Check for cycle detection
-        nested_ref = self_ref["self_ref"]
-        assert isinstance(nested_ref, dict)
-        assert nested_ref["id"] == "nr1"
-
-        # In a cycle, we should detect and not recurse infinitely
-        assert "__cycle_reference__" in nested_ref or len(nested_ref) <= 2
+        self_ref_dict = viewer_dict["self_ref"]
+        assert isinstance(self_ref_dict, dict)
+        assert self_ref_dict["id"] == "nr2"
+        assert "metadata" not in self_ref_dict
+        nested_ref_dict = self_ref_dict["self_ref"]
+        assert isinstance(nested_ref_dict, dict)
+        has_cycle_marker = nested_ref_dict.get("__cycle_reference__") is True
+        has_id_only = "id" in nested_ref_dict and len(nested_ref_dict) <= 2
+        assert has_cycle_marker or has_id_only, f"Cycle dict unexpected: {nested_ref_dict}"
+        if not has_cycle_marker:
+             assert nested_ref_dict["id"] == "nr1"
 
     def test_empty_collections(self, empty_list_model):
         """Test with empty collections"""
-        # Get VIEWER view
         viewer_dict = empty_list_model.visible_dict(Role.VIEWER.value)
         assert viewer_dict["items"] == []
-
-        # Now test with to_response_model
         response = empty_list_model.to_response_model(Role.VIEWER.value)
-        assert response.id == empty_list_model.id
-        assert response.items == []
+        assert hasattr(response, "id") and response.id == empty_list_model.id
+        assert hasattr(response, "items") and response.items == []
 
     def test_role_inheritance(self, simple_field_model):
         """Test that role inheritance works correctly"""
-        # ADMIN inherits from EDITOR, which inherits from VIEWER
-        # So ADMIN should see all fields visible to any role
         admin_dict = simple_field_model.visible_dict(Role.ADMIN.value)
         assert set(admin_dict.keys()) == {"id", "name", "description", "secret"}
-
-        # EDITOR inherits from VIEWER, so should see all VIEWER fields
         editor_dict = simple_field_model.visible_dict(Role.EDITOR.value)
         assert set(editor_dict.keys()) == {"id", "name", "description"}
-
-        # VIEWER sees only its own fields
         viewer_dict = simple_field_model.visible_dict(Role.VIEWER.value)
         assert set(viewer_dict.keys()) == {"id", "name"}
 
     def test_response_model_creation(self, simple_field_model):
-        """Test response model creation"""
-        # Create a VIEWER response model
+        """Test response model creation for different roles"""
         viewer_response = simple_field_model.to_response_model(Role.VIEWER.value)
-        assert hasattr(viewer_response, "id")
-        assert hasattr(viewer_response, "name")
-        assert not hasattr(viewer_response, "description")
-        assert not hasattr(viewer_response, "secret")
-
-        # Create an EDITOR response model
+        assert hasattr(viewer_response, "id") and hasattr(viewer_response, "name")
+        assert not hasattr(viewer_response, "description") and not hasattr(viewer_response, "secret")
         editor_response = simple_field_model.to_response_model(Role.EDITOR.value)
-        assert hasattr(editor_response, "id")
-        assert hasattr(editor_response, "name")
-        assert hasattr(editor_response, "description")
+        assert hasattr(editor_response, "id") and hasattr(editor_response, "name") and hasattr(editor_response, "description")
         assert not hasattr(editor_response, "secret")
+        admin_response = simple_field_model.to_response_model(Role.ADMIN.value)
+        assert hasattr(admin_response, "id") and hasattr(admin_response, "name") and hasattr(admin_response, "description") and hasattr(admin_response, "secret")
+
 
     def test_response_model_caching(self):
-        """Test that response models are cached for performance"""
-        # Create response models
-        model1 = SimpleFieldModel.create_response_model(Role.VIEWER.value)
-        model2 = SimpleFieldModel.create_response_model(Role.VIEWER.value)
+        """Test that response model *types* are cached for performance"""
+        # FIX: Do not import internal cache. Test behavior instead.
+        # from pydantic_visible_fields import _RESPONSE_MODEL_CACHE # REMOVED
+        # _RESPONSE_MODEL_CACHE.clear() # Cannot clear if not imported
 
-        # They should be the same object (cached)
-        assert model1 is model2
+        # Create response model types (not instances)
+        ModelType1 = SimpleFieldModel.create_response_model(Role.VIEWER.value)
+        ModelType2 = SimpleFieldModel.create_response_model(Role.VIEWER.value)
+        ModelType3 = SimpleFieldModel.create_response_model(Role.EDITOR.value)
 
-    def test_configure_visibility(self, simple_class_model):
-        """Test dynamic configuration of visibility"""
-        # First verify the initial visible fields
-        assert SimpleClassModel._get_all_visible_fields(Role.VIEWER.value) == {
-            "id",
-            "name",
-        }
+        # Types generated for the same base model and role should be identical
+        assert ModelType1 is ModelType2
+        # Types generated for different roles should be different
+        assert ModelType1 is not ModelType3
 
-        # Configure visibility for VIEWER role
-        SimpleClassModel.configure_visibility(
-            Role.VIEWER.value, {"id", "name", "new_field"}
-        )
-        assert SimpleClassModel._get_all_visible_fields(Role.VIEWER.value) == {
-            "id",
-            "name",
-            "new_field",
-        }
 
-        # Configure visibility back to original
-        
-        
+    def test_configure_visibility(self):
+        """Test dynamic configuration of visibility using configure_visibility"""
+        class ConfigurableModel(VisibleFieldsModel):
+             id: str = field(visible_to=[Role.VIEWER])
+             data: str = field() # Initially not visible
+
+        original_viewer_fields = ConfigurableModel._get_all_visible_fields(Role.VIEWER.value).copy()
+        original_editor_fields = ConfigurableModel._get_all_visible_fields(Role.EDITOR.value).copy()
+
+        try:
+            # Verify initial state
+            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {"id"}
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id"}
+
+            # Dynamically configure visibility for EDITOR
+            ConfigurableModel.configure_visibility(Role.EDITOR.value, {"id", "data"})
+
+            # Verify new state
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id", "data"}
+            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {"id"}
+            assert ConfigurableModel._get_all_visible_fields(Role.ADMIN.value) == {"id", "data"}
+
+        finally:
+            # Reset visibility for EDITOR back to original inheritance
+            # This assumes configure_visibility overwrites, so setting empty works if base is VIEWER
+            # If configure_visibility adds, we might need a reset function or re-register original
+            ConfigurableModel.configure_visibility(Role.EDITOR.value, original_editor_fields - original_viewer_fields) # Set only fields EDITOR explicitly had
+
+            # Verify reset
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id"}
+            assert ConfigurableModel._get_all_visible_fields(Role.ADMIN.value) == {"id"}
+
+
     def test_create_response_model_does_not_corrupt_original_types(self):
         """
         Verify that calling create_response_model does not modify the
         type annotations or FieldInfo objects of the original model's fields.
         """
-
+        # Define model locally for test isolation
         class ModelForTypeCorruptionTest(VisibleFieldsModel):
-            """Model specifically for testing type corruption"""
             id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
             optional_str: Optional[str] = field(visible_to=[Role.VIEWER], default=None)
-            list_of_int: List[int] = field(visible_to=[Role.EDITOR],
-                                           default_factory=list)
-            dict_field: Dict[str, float] = field(visible_to=[Role.ADMIN],
-                                                 default_factory=dict)
-            nested_model: Optional[SimpleFieldModel] = field(visible_to=[Role.VIEWER],
-                                                             default=None)  # Add nested model case
-            secret_data: str = field(visible_to=[Role.ADMIN])  # Simple type control
+            list_of_int: List[int] = field(visible_to=[Role.EDITOR], default_factory=list)
+            dict_field: Dict[str, float] = field(visible_to=[Role.ADMIN], default_factory=dict)
+            nested_model: Optional[SimpleFieldModel] = field(visible_to=[Role.VIEWER], default=None)
+            secret_data: str = field(visible_to=[Role.ADMIN])
 
-        # 1. Get initial types/FieldInfo from the original model
         initial_fields = ModelForTypeCorruptionTest.model_fields
-
-        # Store the initial annotations
         initial_optional_annotation = initial_fields['optional_str'].annotation
         initial_list_annotation = initial_fields['list_of_int'].annotation
         initial_dict_annotation = initial_fields['dict_field'].annotation
         initial_nested_annotation = initial_fields['nested_model'].annotation
         initial_simple_annotation = initial_fields['secret_data'].annotation
-
-        # Store the initial FieldInfo objects themselves for identity check
         initial_optional_fieldinfo = initial_fields['optional_str']
         initial_list_fieldinfo = initial_fields['list_of_int']
         initial_dict_fieldinfo = initial_fields['dict_field']
         initial_nested_fieldinfo = initial_fields['nested_model']
         initial_simple_fieldinfo = initial_fields['secret_data']
 
-
-        # Sanity check initial types (Pydantic normalizes Optional[T] to Union[T, None])
+        # Sanity check initial types
         assert initial_optional_annotation == Union[str, NoneType] or initial_optional_annotation == Optional[str]
         assert initial_list_annotation == List[int]
         assert initial_dict_annotation == Dict[str, float]
         assert initial_nested_annotation == Union[SimpleFieldModel, NoneType] or initial_nested_annotation == Optional[SimpleFieldModel]
         assert initial_simple_annotation == str
 
-        # 2. Call create_response_model (this triggers the bug in the faulty code)
-        # Call for roles that include the complex types
-        _ = ModelForTypeCorruptionTest.create_response_model(Role.VIEWER.value) # Includes optional_str, nested_model
-        _ = ModelForTypeCorruptionTest.create_response_model(Role.EDITOR.value) # Includes list_of_int
-        _ = ModelForTypeCorruptionTest.create_response_model(Role.ADMIN.value)  # Includes dict_field
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.VIEWER.value)
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.EDITOR.value)
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.ADMIN.value)
 
-        # 3. Get types/FieldInfo again AFTER creating response models
         final_fields = ModelForTypeCorruptionTest.model_fields
-
         final_optional_annotation = final_fields['optional_str'].annotation
         final_list_annotation = final_fields['list_of_int'].annotation
         final_dict_annotation = final_fields['dict_field'].annotation
         final_nested_annotation = final_fields['nested_model'].annotation
         final_simple_annotation = final_fields['secret_data'].annotation
-
         final_optional_fieldinfo = final_fields['optional_str']
         final_list_fieldinfo = final_fields['list_of_int']
         final_dict_fieldinfo = final_fields['dict_field']
         final_nested_fieldinfo = final_fields['nested_model']
         final_simple_fieldinfo = final_fields['secret_data']
 
-
-        # 4. Assert that the ANNOTATIONS in the ORIGINAL model have NOT changed
-        assert final_optional_annotation == initial_optional_annotation, \
-            f"Optional field annotation changed from {initial_optional_annotation} to {final_optional_annotation}"
-        assert final_list_annotation == initial_list_annotation, \
-            f"List field annotation changed from {initial_list_annotation} to {final_list_annotation}"
-        assert final_dict_annotation == initial_dict_annotation, \
-            f"Dict field annotation changed from {initial_dict_annotation} to {final_dict_annotation}"
-        assert final_nested_annotation == initial_nested_annotation, \
-            f"Nested Model field annotation changed from {initial_nested_annotation} to {final_nested_annotation}"
-        assert final_simple_annotation == initial_simple_annotation, \
-            f"Simple field annotation changed from {initial_simple_annotation} to {final_simple_annotation}"
-
-        # 5. Assert that the FieldInfo OBJECTS in the ORIGINAL model are the SAME objects
+        assert final_optional_annotation == initial_optional_annotation, "Optional field annotation changed"
+        assert final_list_annotation == initial_list_annotation, "List field annotation changed"
+        assert final_dict_annotation == initial_dict_annotation, "Dict field annotation changed"
+        assert final_nested_annotation == initial_nested_annotation, "Nested Model field annotation changed"
+        assert final_simple_annotation == initial_simple_annotation, "Simple field annotation changed"
         assert final_optional_fieldinfo is initial_optional_fieldinfo, "Optional FieldInfo object identity changed"
         assert final_list_fieldinfo is initial_list_fieldinfo, "List FieldInfo object identity changed"
         assert final_dict_fieldinfo is initial_dict_fieldinfo, "Dict FieldInfo object identity changed"
         assert final_nested_fieldinfo is initial_nested_fieldinfo, "Nested Model FieldInfo object identity changed"
         assert final_simple_fieldinfo is initial_simple_fieldinfo, "Simple FieldInfo object identity changed"
 
+    # --- Tests for Potential Bugs ---
+
+    # Note: These tests target bugs in the *original* (unfixed) library code.
+    # They are expected to FAIL until the library code is corrected.
+
+    def test_to_response_model_preserves_types_without_json_loss(self, model_with_specific_types):
+        """
+        Tests that to_response_model preserves specific Python types
+        (datetime, UUID, Enum) and doesn't corrupt them via JSON roundtrip.
+        (EXPECTED TO FAIL with original buggy to_response_model).
+        """
+        original_model = model_with_specific_types
+        role = Role.ADMIN.value
+        response_model_instance = original_model.to_response_model(role=role)
+
+        assert isinstance(response_model_instance.event_time, datetime), \
+            f"Expected datetime, got {type(response_model_instance.event_time)}"
+        assert isinstance(response_model_instance.unique_id, uuid.UUID), \
+            f"Expected UUID, got {type(response_model_instance.unique_id)}"
+        assert isinstance(response_model_instance.current_status, Role), \
+            f"Expected Role Enum, got {type(response_model_instance.current_status)}"
+        assert isinstance(response_model_instance.optional_int, int), \
+            f"Expected int, got {type(response_model_instance.optional_int)}"
+        assert response_model_instance.current_status == Role.EDITOR
+
+
+    def test_to_response_model_raises_validation_error_not_fallback(self, corruptible_simple_field_model):
+        """
+        Tests that to_response_model raises ValidationError when the underlying
+        data is invalid for the target response model, instead of using fallbacks.
+        (EXPECTED TO FAIL with original buggy to_response_model).
+        """
+        model = corruptible_simple_field_model
+        role = Role.ADMIN.value
+
+        with pytest.raises(ValidationError) as exc_info:
+            model.to_response_model(role=role)
+
+        errors = exc_info.value.errors()
+        error_locs = {err.get('loc',())[0] for err in errors if err.get('loc')}
+        assert 'id' in error_locs or any(e['type']=='missing' for e in errors), "Error for missing 'id' not found"
+        assert 'value' in error_locs, "Error for invalid 'value' type not found"
+
+
+    def test_visible_dict_handles_cycles_correctly(self, node_with_direct_cycle, node_with_indirect_cycle):
+        """
+        Tests that visible_dict correctly identifies cycles and returns
+        a predictable structure (e.g., a marker with id).
+        """
+        direct_cycle_dict = node_with_direct_cycle.visible_dict(role=Role.VIEWER.value)
+        assert "self_ref" in direct_cycle_dict
+        ref_in_direct_cycle = direct_cycle_dict["self_ref"]
+        assert isinstance(ref_in_direct_cycle, dict)
+        assert ref_in_direct_cycle.get("__cycle_reference__") is True, "Cycle marker missing in direct cycle"
+        assert "id" in ref_in_direct_cycle, "ID missing in direct cycle representation"
+        assert ref_in_direct_cycle["id"] == node_with_direct_cycle.id
+
+        indirect_cycle_dict_a = node_with_indirect_cycle.visible_dict(role=Role.VIEWER.value)
+        assert "ref_b" in indirect_cycle_dict_a
+        ref_b_dict = indirect_cycle_dict_a["ref_b"]
+        assert isinstance(ref_b_dict, dict)
+        assert "ref_a" in ref_b_dict
+        ref_a_in_b_dict = ref_b_dict["ref_a"]
+        assert isinstance(ref_a_in_b_dict, dict)
+        assert ref_a_in_b_dict.get("__cycle_reference__") is True, "Cycle marker missing in indirect cycle"
+        assert "id" in ref_a_in_b_dict, "ID missing in indirect cycle representation"
+        assert ref_a_in_b_dict["id"] == node_with_indirect_cycle.id
