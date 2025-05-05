@@ -6,6 +6,7 @@ including field-level visibility, role inheritance, and complex model structures
 """
 
 from enum import Enum
+from types import NoneType
 from typing import ClassVar, Dict, List, Optional, Set, Union
 
 import pytest
@@ -879,3 +880,89 @@ class TestVisibleFields:
         }
 
         # Configure visibility back to original
+        
+        
+    def test_create_response_model_does_not_corrupt_original_types(self):
+        """
+        Verify that calling create_response_model does not modify the
+        type annotations or FieldInfo objects of the original model's fields.
+        """
+
+        class ModelForTypeCorruptionTest(VisibleFieldsModel):
+            """Model specifically for testing type corruption"""
+            id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
+            optional_str: Optional[str] = field(visible_to=[Role.VIEWER], default=None)
+            list_of_int: List[int] = field(visible_to=[Role.EDITOR],
+                                           default_factory=list)
+            dict_field: Dict[str, float] = field(visible_to=[Role.ADMIN],
+                                                 default_factory=dict)
+            nested_model: Optional[SimpleFieldModel] = field(visible_to=[Role.VIEWER],
+                                                             default=None)  # Add nested model case
+            secret_data: str = field(visible_to=[Role.ADMIN])  # Simple type control
+
+        # 1. Get initial types/FieldInfo from the original model
+        initial_fields = ModelForTypeCorruptionTest.model_fields
+
+        # Store the initial annotations
+        initial_optional_annotation = initial_fields['optional_str'].annotation
+        initial_list_annotation = initial_fields['list_of_int'].annotation
+        initial_dict_annotation = initial_fields['dict_field'].annotation
+        initial_nested_annotation = initial_fields['nested_model'].annotation
+        initial_simple_annotation = initial_fields['secret_data'].annotation
+
+        # Store the initial FieldInfo objects themselves for identity check
+        initial_optional_fieldinfo = initial_fields['optional_str']
+        initial_list_fieldinfo = initial_fields['list_of_int']
+        initial_dict_fieldinfo = initial_fields['dict_field']
+        initial_nested_fieldinfo = initial_fields['nested_model']
+        initial_simple_fieldinfo = initial_fields['secret_data']
+
+
+        # Sanity check initial types (Pydantic normalizes Optional[T] to Union[T, None])
+        assert initial_optional_annotation == Union[str, NoneType] or initial_optional_annotation == Optional[str]
+        assert initial_list_annotation == List[int]
+        assert initial_dict_annotation == Dict[str, float]
+        assert initial_nested_annotation == Union[SimpleFieldModel, NoneType] or initial_nested_annotation == Optional[SimpleFieldModel]
+        assert initial_simple_annotation == str
+
+        # 2. Call create_response_model (this triggers the bug in the faulty code)
+        # Call for roles that include the complex types
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.VIEWER.value) # Includes optional_str, nested_model
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.EDITOR.value) # Includes list_of_int
+        _ = ModelForTypeCorruptionTest.create_response_model(Role.ADMIN.value)  # Includes dict_field
+
+        # 3. Get types/FieldInfo again AFTER creating response models
+        final_fields = ModelForTypeCorruptionTest.model_fields
+
+        final_optional_annotation = final_fields['optional_str'].annotation
+        final_list_annotation = final_fields['list_of_int'].annotation
+        final_dict_annotation = final_fields['dict_field'].annotation
+        final_nested_annotation = final_fields['nested_model'].annotation
+        final_simple_annotation = final_fields['secret_data'].annotation
+
+        final_optional_fieldinfo = final_fields['optional_str']
+        final_list_fieldinfo = final_fields['list_of_int']
+        final_dict_fieldinfo = final_fields['dict_field']
+        final_nested_fieldinfo = final_fields['nested_model']
+        final_simple_fieldinfo = final_fields['secret_data']
+
+
+        # 4. Assert that the ANNOTATIONS in the ORIGINAL model have NOT changed
+        assert final_optional_annotation == initial_optional_annotation, \
+            f"Optional field annotation changed from {initial_optional_annotation} to {final_optional_annotation}"
+        assert final_list_annotation == initial_list_annotation, \
+            f"List field annotation changed from {initial_list_annotation} to {final_list_annotation}"
+        assert final_dict_annotation == initial_dict_annotation, \
+            f"Dict field annotation changed from {initial_dict_annotation} to {final_dict_annotation}"
+        assert final_nested_annotation == initial_nested_annotation, \
+            f"Nested Model field annotation changed from {initial_nested_annotation} to {final_nested_annotation}"
+        assert final_simple_annotation == initial_simple_annotation, \
+            f"Simple field annotation changed from {initial_simple_annotation} to {final_simple_annotation}"
+
+        # 5. Assert that the FieldInfo OBJECTS in the ORIGINAL model are the SAME objects
+        assert final_optional_fieldinfo is initial_optional_fieldinfo, "Optional FieldInfo object identity changed"
+        assert final_list_fieldinfo is initial_list_fieldinfo, "List FieldInfo object identity changed"
+        assert final_dict_fieldinfo is initial_dict_fieldinfo, "Dict FieldInfo object identity changed"
+        assert final_nested_fieldinfo is initial_nested_fieldinfo, "Nested Model FieldInfo object identity changed"
+        assert final_simple_fieldinfo is initial_simple_fieldinfo, "Simple FieldInfo object identity changed"
+
