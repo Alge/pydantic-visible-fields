@@ -1,4 +1,4 @@
-.PHONY: setup dev test lint format update-deps build clean publish publish-test
+.PHONY: setup dev test lint format typecheck update-deps build clean publish publish-test
 
 setup:
 	pip install -e ".[dev]"
@@ -11,11 +11,13 @@ test:
 
 lint:
 	flake8 src/pydantic_visible_fields tests
-	mypy src/pydantic_visible_fields
 
 format:
 	isort src/pydantic_visible_fields tests
 	black src/pydantic_visible_fields tests
+
+typecheck:
+	mypy src/pydantic_visible_fields
 
 update-deps:
 	pip-compile requirements.in --upgrade
