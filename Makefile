@@ -1,4 +1,4 @@
-.PHONY: setup dev test lint format typecheck update-deps build clean publish publish-test
+.PHONY: setup dev test lint format typecheck update-deps build clean publish publish-test bump-patch bump-minor bump-major
 
 setup:
 	pip install -e ".[dev]"
@@ -38,3 +38,19 @@ publish-test:
 publish:
 	python -m build
 	python -m twine upload dist/*
+
+
+# Bump patch version (e.g., 1.2.3 -> 1.2.4) and create git tag
+bump-patch:
+	bump2version patch --verbose --tag
+	git push --tags
+
+# Bump minor version (e.g., 1.2.3 -> 1.3.0) and create git tag
+bump-minor:
+	bump2version minor --verbose --tag
+	git push --tags
+
+# Bump major version (e.g., 1.2.3 -> 2.0.0) and create git tag
+bump-major:
+	bump2version major --verbose --tag
+	git push --tags
