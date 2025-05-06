@@ -17,7 +17,7 @@ from pydantic_visible_fields.paginatedresponse import (
     from_iterable,
 )
 
-__version__ = "0.2.5"  # Update version if changes warrant it
+__version__ = "0.2.6"  # Update version if changes warrant it
 __all__ = [
     # Core components
     "VisibleFieldsMixin",
