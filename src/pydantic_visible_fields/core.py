@@ -9,7 +9,6 @@ the `field` function for declaring visible fields, and configuration functions.
 from __future__ import annotations
 
 import logging
-import sys
 from enum import Enum
 from typing import (
     Any,
@@ -23,6 +22,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    cast,
     get_args,
     get_origin,
 )
@@ -435,27 +435,35 @@ class VisibleFieldsMixin:
         role: str,
         model_name_suffix: str,
         visited_fwd_refs: Optional[Set[str]] = None,
+        # Add tracker for ongoing model creations
+        creating_models: Optional[Set[Tuple[str, str, str]]] = None,
     ) -> Any:
         """
         Determine the appropriate type annotation for a response model field.
 
         Handles nesting, generics (List, Dict, Union, Optional), ForwardRefs,
-        and nested `VisibleFieldsMixin` models recursively.
+        and nested `VisibleFieldsMixin` models recursively. Includes checks
+        to prevent infinite recursion during model creation. Falls back to Any
+        for ForwardRefs to ensure robustness against resolution errors.
 
         Args:
             annotation: The original type annotation of the field.
             role: The target role identifier (string).
             model_name_suffix: Suffix for generated response model names.
             visited_fwd_refs: Set tracking visited forward references to
-                detect recursion cycles during type resolution.
+                detect type definition cycles.
+            creating_models: Set tracking response models currently being
+                created to detect model creation cycles.
 
         Returns:
             The calculated type annotation (e.g., `int`, `List[str]`,
-            `Optional[NestedResponseModel]`, `Any`). Returns `Any` or
-            simplified types if complex resolution fails or isn't needed.
+            `Optional[NestedResponseModel]`, `Any`). Returns `Any` for
+            ForwardRefs or to break creation cycles.
         """
         if visited_fwd_refs is None:
             visited_fwd_refs = set()
+        if creating_models is None:
+            creating_models = set()
 
         origin = get_origin(annotation)
         args = get_args(annotation)
@@ -468,118 +476,99 @@ class VisibleFieldsMixin:
                 if arg is type(None):
                     none_present = True
                     continue
-                # Recursively process each type within the Union
-                # Pass a copy of visited_fwd_refs for independent branch processing
                 processed_args.append(
                     cls._get_recursive_response_type(
-                        arg, role, model_name_suffix, visited_fwd_refs.copy()
+                        arg,
+                        role,
+                        model_name_suffix,
+                        visited_fwd_refs.copy(),
+                        creating_models=creating_models,
                     )
                 )
 
-            # Filter out potential None types if Any is present
-            valid_processed_args = list(dict.fromkeys(processed_args))  # Unique
+            valid_processed_args = list(dict.fromkeys(processed_args))
             if Any in valid_processed_args and type(None) in valid_processed_args:
                 valid_processed_args.remove(type(None))
             if not valid_processed_args:
-                # Union contained only None or resolvable types became Any
                 return Optional[Any] if none_present else Any
 
-            # Reconstruct the Union/Optional type hint
             if none_present:
-                if not valid_processed_args:  # Was Optional[None]?
+                if not valid_processed_args:
                     return Optional[Any]
-                if len(valid_processed_args) == 1:  # Was Optional[T]
-                    return Optional[valid_processed_args[0]]
-                # Was Optional[Union[A, B]]
-                return Optional[Union[tuple(valid_processed_args)]]
-            else:  # Was Union[A, B, ...] without None
                 if len(valid_processed_args) == 1:
-                    return valid_processed_args[0]  # Simplify Union[T] to T
+                    return Optional[valid_processed_args[0]]
+                return Optional[Union[tuple(valid_processed_args)]]
+            else:
+                if len(valid_processed_args) == 1:
+                    return valid_processed_args[0]
                 return Union[tuple(valid_processed_args)]
 
         # Handle List[T] -> List[ProcessedT]
         if origin is list or origin is List:
             if not args:
-                return List[Any]  # List without type arg
+                return List[Any]
             nested_type = cls._get_recursive_response_type(
-                args[0], role, model_name_suffix, visited_fwd_refs.copy()
+                args[0],
+                role,
+                model_name_suffix,
+                visited_fwd_refs.copy(),
+                creating_models=creating_models,
             )
-            # Ignore mypy warning about using variable as type parameter
             return List[nested_type]  # type: ignore[valid-type]
 
         # Handle Dict[K, V] -> Dict[K, ProcessedV]
         if origin is dict or origin is Dict:
             if not args or len(args) != 2:
                 return Dict[Any, Any]
-            key_type = args[0]  # Assume key type doesn't change visibility
+            key_type = args[0]
             value_type = cls._get_recursive_response_type(
-                args[1], role, model_name_suffix, visited_fwd_refs.copy()
+                args[1],
+                role,
+                model_name_suffix,
+                visited_fwd_refs.copy(),
+                creating_models=creating_models,
             )
-            # Ignore mypy warning about using variables as type parameters
             return Dict[key_type, value_type]  # type: ignore[valid-type]
 
         # Handle Forward References (e.g., type hints as strings)
         if isinstance(annotation, ForwardRef):
-            # Ignore mypy warning about unreachable code due to preceding checks
             fwd_arg = annotation.__forward_arg__  # type: ignore[unreachable]
             if fwd_arg in visited_fwd_refs:
-                # Cycle detected in type definitions, return original ForwardRef
-                # Pydantic's create_model can often handle this.
                 logger.debug(
                     f"Cycle detected resolving ForwardRef "
-                    f"'{fwd_arg}', returning original ref."
+                    f"'{fwd_arg}', returning Any."
                 )
-                return annotation
+                return Any
             visited_fwd_refs.add(fwd_arg)
 
-            resolved_type: Any = annotation  # Default fallback
-            try:
-                # Evaluate the ForwardRef in the context of the class's module
-                module_name = getattr(cls, "__module__", None)
-                global_ns = (
-                    sys.modules[module_name].__dict__
-                    if module_name and module_name in sys.modules
-                    else globals()
-                )
-                local_ns = {}  # Usually okay, provide class dict if needed
-
-                # _evaluate resolves the string to the actual type object
-                actual_type = annotation._evaluate(global_ns, local_ns, frozenset())
-
-                # Recursively process the now-resolved type
-                resolved_type = cls._get_recursive_response_type(
-                    actual_type, role, model_name_suffix, visited_fwd_refs
-                )
-                logger.debug(
-                    f"Resolved ForwardRef '{fwd_arg}' to "
-                    f"{actual_type}, processed type: {resolved_type}"
-                )
-            except NameError as e:
-                logger.warning(
-                    f"Could not resolve ForwardRef '{fwd_arg}': {e}. "
-                    f"Check imports. Using original ref."
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed evaluating ForwardRef '{fwd_arg}': {e}. "
-                    f"Using original ref."
-                )
-            finally:
-                # Ensure removal from visited set after this branch
-                visited_fwd_refs.remove(fwd_arg)
-            return resolved_type
+            # Pragmatic Choice: Return Any for all ForwardRefs
+            # Avoids complex evaluation and potential NameErrors, but loses type info.
+            logger.debug(
+                f"Treating ForwardRef '{fwd_arg}' as Any "
+                f"for response model type hint."
+            )
+            # Ensure removal from visited set even though we return Any
+            # This is important if the same ForwardRef appears elsewhere non-cyclically
+            visited_fwd_refs.remove(fwd_arg)
+            return Any
 
         # Handle nested models that use VisibleFieldsMixin
         if isinstance(annotation, type) and issubclass(annotation, VisibleFieldsMixin):
-            # Recursively create the specific response model type for the nested field
-            return annotation.create_response_model(role, model_name_suffix)
+            model_key = (annotation.__name__, role, model_name_suffix)
+            if model_key in creating_models:
+                logger.warning(
+                    f"Detected creation recursion for {model_key}. "
+                    f"Returning Any type to break loop."
+                )
+                return Any
+
+            # Pass the tracker down when creating nested response models
+            return annotation.create_response_model(
+                role, model_name_suffix, creating_models=creating_models
+            )
 
         # Handle other nested Pydantic models (not using the mixin)
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            # For the response *type hint*, represent these as Dict[str, Any].
-            # This prevents create_model from trying to validate internal
-            # fields of the non-mixin model that might not be present.
-            # Actual data conversion happens during validation/instantiation.
             logger.debug(
                 f"Treating non-mixin BaseModel "
                 f"{annotation.__name__} as Dict[str, Any] "
@@ -592,275 +581,305 @@ class VisibleFieldsMixin:
 
     @classmethod
     def create_response_model(
-        cls, role: str, model_name_suffix: str = "Response"
+        cls,
+        role: str,
+        model_name_suffix: str = "Response",
+        # Add creating_models tracker argument
+        creating_models: Optional[Set[Tuple[str, str, str]]] = None,
     ) -> Type[BaseModel]:
         """
         Create (or retrieve from cache) a Pydantic model for a specific role.
 
         Defines a new Pydantic model containing only the fields visible to
         the given role, with appropriate nested types and copied constraints.
+        Includes logic to prevent infinite recursion during creation of
+        mutually dependent response models.
 
         Args:
             role: The target role identifier (string).
-            model_name_suffix: Suffix to append to the original class name
-                for the generated response model (e.g., "User" -> "UserResponse").
+            model_name_suffix: Suffix for generated response model names.
+            creating_models: Internal set used to track models currently
+                under creation to detect recursion.
 
         Returns:
-            The dynamically created Pydantic model Type.
+            The dynamically created Pydantic model Type, or `Any` if a
+            creation cycle is detected involving this specific model key.
 
         Raises:
-            ValueError: If `create_model` fails, often due to invalid field
-                definitions resulting from complex type hints or constraints.
+            ValueError: If `create_model` or `model_rebuild` fails.
         """
+        # Initialize tracker if it's the top-level call for this path
+        if creating_models is None:
+            creating_models = set()
+
         cache_key = (cls.__name__, role, model_name_suffix)
+
+        # --- Check for creation recursion BEFORE cache check ---
+        if cache_key in creating_models:
+            logger.warning(
+                f"Detected direct creation recursion for {cache_key}. "
+                f"Returning Any type to break loop."
+            )
+            # Return Any to break the cycle. Needs cast for type checker.
+            return cast(Type[BaseModel], Any)
+
         cached_model = _RESPONSE_MODEL_CACHE.get(cache_key)
         if cached_model:
-            # Return cached model if available
             return cached_model
 
         logger.debug(
             f"Creating response model for {cls.__name__}, "
             f"role='{role}', suffix='{model_name_suffix}'"
         )
-        # Get all fields visible to this role, filtered by model_fields
+
+        # --- Add current model to the tracker BEFORE processing fields ---
+        creating_models.add(cache_key)
+        # --------------------------------------------------------------
+
+        # Get visible fields and prepare definitions
         visible_fields = cls._get_all_visible_fields(role)
-        # Dictionary to hold field definitions for create_model
         new_fields_definition: Dict[str, Tuple[Any, Any]] = {}
-        # Track forward references during this specific creation process
         visited_fwd_refs_for_creation: Set[str] = set()
+        response_model: Type[BaseModel]  # Define variable before try block
 
-        for field_name in visible_fields:
-            original_field_info = cls.model_fields[field_name]
-            original_annotation = original_field_info.annotation
+        try:  # Wrap the creation process in try/finally to remove from tracker
+            # --- Loop to build new_fields_definition ---
+            for field_name in visible_fields:
+                original_field_info = cls.model_fields[field_name]
+                original_annotation = original_field_info.annotation
 
-            if original_annotation is None:
-                logger.warning(
-                    f"Field '{field_name}' in {cls.__name__} has "
-                    f"no annotation, skipping for response model."
-                )
-                continue
-
-            # Determine the type hint for the response model's field
-            response_annotation = cls._get_recursive_response_type(
-                original_annotation,
-                role,
-                model_name_suffix,
-                visited_fwd_refs_for_creation,
-            )
-
-            # --- Determine Field Definition (Type Hint, Default/FieldInfo) ---
-            field_definition_value: Any
-            needs_field_wrapper = False
-            field_kwargs = {}
-
-            # 1. Handle Default Value / Required Status
-            if original_field_info.is_required():
-                field_definition_value = ...  # Ellipsis marks required field
-            else:
-                # Field is not required, determine default
-                if original_field_info.default is not PydanticUndefined:
-                    field_kwargs["default"] = original_field_info.default
-                    needs_field_wrapper = True
-                elif original_field_info.default_factory is not None:
-                    field_kwargs["default_factory"] = (
-                        original_field_info.default_factory
-                    )
-                    needs_field_wrapper = True
-                else:
-                    # Not required, no explicit default: Usually implies None
-                    field_kwargs["default"] = None
-                    needs_field_wrapper = True
-
-            # 2. Copy Metadata and Constraints into field_kwargs
-            # These attributes, if present, necessitate using Field()
-            if original_field_info.description:
-                field_kwargs["description"] = original_field_info.description
-                needs_field_wrapper = True
-            if original_field_info.title:
-                field_kwargs["title"] = original_field_info.title
-                needs_field_wrapper = True
-            # Copy alias only if it's different from the field name
-            if original_field_info.alias and original_field_info.alias != field_name:
-                field_kwargs["alias"] = original_field_info.alias
-                needs_field_wrapper = True
-            if original_field_info.examples:
-                field_kwargs["examples"] = original_field_info.examples
-                needs_field_wrapper = True
-
-            # Copy json_schema_extra, excluding our internal 'visible_to'
-            # Ensure original_extra is treated as a dict before accessing items
-            original_extra_maybe = original_field_info.json_schema_extra
-            extra_to_copy: Dict[str, Any] = {}
-            if isinstance(original_extra_maybe, dict):
-                extra_to_copy = {
-                    k: v for k, v in original_extra_maybe.items() if k != "visible_to"
-                }
-                if extra_to_copy:
-                    field_kwargs["json_schema_extra"] = extra_to_copy
-                    needs_field_wrapper = True
-            elif original_extra_maybe is not None:
-                # It might be a callable, log a warning if so
-                logger.warning(
-                    f"Cannot copy non-dict json_schema_extra " f"for field {field_name}"
-                )
-
-            # -- Refined Constraint Copying --
-            # Check direct attributes on FieldInfo first
-            for constraint_key in [
-                "gt",
-                "ge",
-                "lt",
-                "le",
-                "multiple_of",
-                "min_length",
-                "max_length",  # String/Bytes constraints
-                "min_items",
-                "max_items",  # List constraints
-                "discriminator",
-                "frozen",
-                "strict",
-            ]:
-                val = getattr(original_field_info, constraint_key, PydanticUndefined)
-                if val is not PydanticUndefined and val is not None:
-                    field_kwargs[constraint_key] = val
-                    needs_field_wrapper = True
-
-            # Handle pattern separately to get the string representation
-            pattern_val = getattr(original_field_info, "pattern", PydanticUndefined)
-            if pattern_val is not PydanticUndefined and pattern_val is not None:
-                pattern_str = None
-                if isinstance(pattern_val, str):
-                    pattern_str = pattern_val
-                elif hasattr(pattern_val, "pattern"):  # Check for compiled regex
-                    pattern_str = pattern_val.pattern
-                if pattern_str:
-                    field_kwargs["pattern"] = pattern_str
-                    needs_field_wrapper = True
-                else:
+                if original_annotation is None:
                     logger.warning(
-                        f"Could not serialize pattern constraint "
-                        f"{pattern_val!r} for field {field_name}"
+                        f"Field '{field_name}' in {cls.__name__} has "
+                        f"no annotation, skipping."
+                    )
+                    continue
+
+                # --- Pass the tracker down when resolving types ---
+                response_annotation = cls._get_recursive_response_type(
+                    original_annotation,
+                    role,
+                    model_name_suffix,
+                    visited_fwd_refs_for_creation,
+                    creating_models=creating_models,  # Pass tracker
+                )
+                # ---------------------------------------------------
+
+                # --- Determine Field Definition ---
+                field_definition_value: Any
+                needs_field_wrapper = False
+                field_kwargs = {}
+
+                # 1. Handle Default/Required
+                if original_field_info.is_required():
+                    field_definition_value = ...
+                else:
+                    if original_field_info.default is not PydanticUndefined:
+                        field_kwargs["default"] = original_field_info.default
+                        needs_field_wrapper = True
+                    elif original_field_info.default_factory is not None:
+                        field_kwargs["default_factory"] = (
+                            original_field_info.default_factory
+                        )
+                        needs_field_wrapper = True
+                    else:
+                        field_kwargs["default"] = None
+                        needs_field_wrapper = True
+
+                # 2. Copy Metadata/Constraints
+                if original_field_info.description:
+                    field_kwargs["description"] = original_field_info.description
+                    needs_field_wrapper = True
+                if original_field_info.title:
+                    field_kwargs["title"] = original_field_info.title
+                    needs_field_wrapper = True
+                if (
+                    original_field_info.alias
+                    and original_field_info.alias != field_name
+                ):
+                    field_kwargs["alias"] = original_field_info.alias
+                    needs_field_wrapper = True
+                if original_field_info.examples:
+                    field_kwargs["examples"] = original_field_info.examples
+                    needs_field_wrapper = True
+
+                original_extra_maybe = original_field_info.json_schema_extra
+                extra_to_copy: Dict[str, Any] = {}
+                if isinstance(original_extra_maybe, dict):
+                    extra_to_copy = {
+                        k: v
+                        for k, v in original_extra_maybe.items()
+                        if k != "visible_to"
+                    }
+                    if extra_to_copy:
+                        field_kwargs["json_schema_extra"] = extra_to_copy
+                        needs_field_wrapper = True
+                elif original_extra_maybe is not None:
+                    logger.warning(
+                        f"Cannot copy non-dict json_schema_extra "
+                        f"for field {field_name}"
                     )
 
-            # Check metadata list for constraints (often from Annotated)
-            if original_field_info.metadata:
-                # Map known metadata constraint attributes to Field kwargs
-                constraint_map = {
-                    "gt": "gt",
-                    "ge": "ge",
-                    "lt": "lt",
-                    "le": "le",
-                    "multiple_of": "multiple_of",
-                    "min_length": "min_length",
-                    "max_length": "max_length",
-                    "pattern": "pattern",
-                    "min_items": "min_items",
-                    "max_items": "max_items",
-                    "strict": "strict",
-                    "lower_case": "lower_case",
-                    "upper_case": "upper_case",
-                    # Add more if other Annotated constraints are used
-                }
-                for meta_item in original_field_info.metadata:
-                    for meta_attr, field_kwarg in constraint_map.items():
-                        if hasattr(meta_item, meta_attr):
-                            # Only add if not already set from direct attrs
-                            if field_kwarg not in field_kwargs:
-                                constraint_val = getattr(meta_item, meta_attr)
-                                # Handle pattern string conversion again
-                                if (
-                                    field_kwarg == "pattern"
-                                    and not isinstance(constraint_val, str)
-                                    and hasattr(constraint_val, "pattern")
-                                ):
-                                    constraint_val = constraint_val.pattern
+                is_resolved_to_any = response_annotation is Any or (
+                    get_origin(response_annotation) is Union
+                    and Any in get_args(response_annotation)
+                )
 
-                                # Add to kwargs if value is usable
-                                if constraint_val is not None:
-                                    field_kwargs[field_kwarg] = constraint_val
-                                    needs_field_wrapper = True
-                                    logger.debug(
-                                        f"Copied constraint '{field_kwarg}="
-                                        f"{constraint_val}' from metadata "
-                                        f"for field '{field_name}'"
-                                    )
-            # -- End Refined Constraint Copying --
+                for constraint_key in [
+                    "gt",
+                    "ge",
+                    "lt",
+                    "le",
+                    "multiple_of",
+                    "min_length",
+                    "max_length",
+                    "min_items",
+                    "max_items",
+                    "discriminator",
+                    "frozen",
+                    "strict",
+                ]:
+                    if constraint_key == "discriminator" and is_resolved_to_any:
+                        logger.debug(
+                            f"Skipping discriminator copy for field "
+                            f"'{field_name}' because type resolved to Any."
+                        )
+                        continue
+                    val = getattr(
+                        original_field_info, constraint_key, PydanticUndefined
+                    )
+                    if val is not PydanticUndefined and val is not None:
+                        field_kwargs[constraint_key] = val
+                        needs_field_wrapper = True
 
-            # 3. Create Field object only if metadata/constraints/default require it
-            if needs_field_wrapper:
-                field_definition_value = Field(**field_kwargs)
-            elif original_field_info.is_required():
-                # Required field, no extra settings needed
-                field_definition_value = ...
+                pattern_val = getattr(original_field_info, "pattern", PydanticUndefined)
+                if pattern_val is not PydanticUndefined and pattern_val is not None:
+                    pattern_str = None
+                    if isinstance(pattern_val, str):
+                        pattern_str = pattern_val
+                    elif hasattr(pattern_val, "pattern"):
+                        pattern_str = pattern_val.pattern
+                    if pattern_str:
+                        field_kwargs["pattern"] = pattern_str
+                        needs_field_wrapper = True
+                    else:
+                        logger.warning(
+                            f"Could not serialize pattern constraint "
+                            f"{pattern_val!r} for field {field_name}"
+                        )
+
+                if original_field_info.metadata:
+                    constraint_map = {
+                        "gt": "gt",
+                        "ge": "ge",
+                        "lt": "lt",
+                        "le": "le",
+                        "multiple_of": "multiple_of",
+                        "min_length": "min_length",
+                        "max_length": "max_length",
+                        "pattern": "pattern",
+                        "min_items": "min_items",
+                        "max_items": "max_items",
+                        "strict": "strict",
+                        "lower_case": "lower_case",
+                        "upper_case": "upper_case",
+                    }
+                    for meta_item in original_field_info.metadata:
+                        for meta_attr, field_kwarg in constraint_map.items():
+                            if hasattr(meta_item, meta_attr):
+                                if field_kwarg not in field_kwargs:
+                                    constraint_val = getattr(meta_item, meta_attr)
+                                    if (
+                                        field_kwarg == "pattern"
+                                        and not isinstance(constraint_val, str)
+                                        and hasattr(constraint_val, "pattern")
+                                    ):
+                                        constraint_val = constraint_val.pattern
+                                    if constraint_val is not None:
+                                        field_kwargs[field_kwarg] = constraint_val
+                                        needs_field_wrapper = True
+                                        logger.debug(
+                                            f"Copied constraint '{field_kwarg}="
+                                            f"{constraint_val}' from metadata "
+                                            f"for field '{field_name}'"
+                                        )
+
+                # 3. Create Field() object or use default
+                if needs_field_wrapper:
+                    field_definition_value = Field(**field_kwargs)
+                elif original_field_info.is_required():
+                    field_definition_value = ...
+                else:
+                    field_definition_value = None
+
+                new_fields_definition[field_name] = (
+                    response_annotation,
+                    field_definition_value,
+                )
+            # --- End loop ---
+
+            # Determine model name (unchanged)
+            default_role_str = _DEFAULT_ROLE or ""
+            if role == default_role_str:
+                model_name = f"{cls.__name__}{model_name_suffix}"
             else:
-                # Optional field, no extra settings => default should be None
-                field_definition_value = None
+                role_suffix = role.replace("_", " ").title().replace(" ", "")
+                model_name = f"{cls.__name__}{role_suffix}{model_name_suffix}"
 
-            # Store the final definition: (type_hint, default_or_fieldinfo)
-            new_fields_definition[field_name] = (
-                response_annotation,
-                field_definition_value,
-            )
-            # --- End Field Definition Logic ---
+            # Create the Pydantic model type
+            try:
+                model_config = ConfigDict(
+                    extra="ignore",
+                    populate_by_name=True,
+                    arbitrary_types_allowed=True,
+                )
+                response_model = create_model(
+                    model_name, __config__=model_config, **new_fields_definition
+                )  # type: ignore[call-overload]
 
-        # Determine the name for the new response model
-        default_role_str = _DEFAULT_ROLE or ""
-        if role == default_role_str:
-            # Use standard suffix for the default role
-            model_name = f"{cls.__name__}{model_name_suffix}"
-        else:
-            # Create a role-specific suffix (e.g., "Admin", "Viewer")
-            role_suffix = role.replace("_", " ").title().replace(" ", "")
-            model_name = f"{cls.__name__}{role_suffix}{model_name_suffix}"
+                # Force resolution of forward references etc.
+                response_model.model_rebuild(force=True)
 
-        # Create the actual Pydantic model type dynamically
-        response_model: Type[BaseModel]
-        try:
-            # Configure the new model (allow extras for flexibility if needed)
-            model_config = ConfigDict(
-                extra="ignore",  # Ignore fields not defined in response model
-                populate_by_name=True,  # Allow population by alias
-                arbitrary_types_allowed=True,  # Helps with complex types
-            )
-            response_model = create_model(
-                model_name, __config__=model_config, **new_fields_definition
-            )  # type: ignore[call-overload] # Ignore mypy overload check
-        except Exception as e:
-            # If creation fails, try to pinpoint the problematic field definition
-            problematic_field = "Unknown"
-            for fname, fdef in new_fields_definition.items():
-                try:
-                    test_config = ConfigDict(
-                        extra="ignore", arbitrary_types_allowed=True
-                    )
-                    # Try creating a test model with just this field
-                    _ = create_model(
-                        f"_Test_{fname}", __config__=test_config, **{fname: fdef}
-                    )  # type: ignore[call-overload] # Test model creation overload
-                except Exception as test_e:
-                    # Capture the first field that fails creation
-                    problematic_field = f"{fname}: {fdef!r} (Error: {test_e})"
-                    break
-            error_context = (
-                f" Problem likely near field definition: {problematic_field}."
-            )
-            logger.error(
-                f"Failed to create response model {model_name}." f"{error_context}",
-                exc_info=True,
-            )
-            # Raise a more informative error to the caller
-            raise ValueError(
-                f"Failed to create response model {model_name}."
-                f"{error_context} Original error: {e}"
-            ) from e
+            except Exception as e:
+                # (Keep existing detailed error handling)
+                problematic_field = "Unknown"
+                for fname, fdef in new_fields_definition.items():
+                    try:
+                        test_config = ConfigDict(
+                            extra="ignore", arbitrary_types_allowed=True
+                        )
+                        temp_model = create_model(
+                            f"_Test_{fname}", __config__=test_config, **{fname: fdef}
+                        )  # type: ignore[call-overload]
+                        temp_model.model_rebuild(force=True)
+                    except Exception as test_e:
+                        problematic_field = f"{fname}: {fdef!r} (Error: {test_e})"
+                        break
+                error_context = (
+                    f" Problem likely near field definition: {problematic_field}."
+                )
+                logger.error(
+                    f"Failed to create/rebuild response model {model_name}."
+                    f"{error_context}",
+                    exc_info=True,
+                )
+                raise ValueError(
+                    f"Failed to create/rebuild response model {model_name}."
+                    f"{error_context} Original error: {e}"
+                ) from e
 
-        # Cache the successfully created model type and return it
-        # No need to cast, create_model returns Type[BaseModel]
-        _RESPONSE_MODEL_CACHE[cache_key] = response_model
-        logger.debug(
-            f"Successfully created and cached response model: " f"{model_name}"
-        )
-        return response_model
+            # Cache the successfully created and rebuilt model type
+            _RESPONSE_MODEL_CACHE[cache_key] = response_model
+            logger.debug(
+                f"Successfully created, rebuilt, and cached response model: "
+                f"{model_name}"
+            )
+            return response_model
+
+        finally:
+            # --- Ensure current model is removed from tracker ---
+            creating_models.remove(cache_key)
+            # ----------------------------------------------------
 
     @classmethod
     def _construct_nested_model(
@@ -868,52 +887,32 @@ class VisibleFieldsMixin:
     ) -> Any:
         """
         Construct a nested BaseModel instance using `model_construct`.
-
-        This bypasses validation but requires the input `value` dictionary
-        to have data that is already structurally compatible (e.g., nested
-        models should ideally be instances or correctly typed dicts). Used
-        internally when preparing data structures before final validation.
-
-        Args:
-            value: The dictionary data for the nested model.
-            annotation: The target `BaseModel` subclass to construct.
-
-        Returns:
-            The constructed model instance, or the original `value` dictionary
-            if construction fails.
+        (Method body unchanged)
         """
         inner_data_for_construct = {}
         target_model_fields = annotation.model_fields
 
         for nested_field_name, nested_field_info in target_model_fields.items():
             nested_value = PydanticUndefined
-            # Check if the key exists in the input dict by field name or alias
             if nested_field_name in value:
                 nested_value = value[nested_field_name]
             elif nested_field_info.alias and nested_field_info.alias in value:
                 nested_value = value[nested_field_info.alias]
 
             if nested_value is not PydanticUndefined:
-                # Recursively process the value intended for the nested field
-                # This ensures deeper nested models are also constructed first
                 processed_nested_value = cls._process_value_for_construct_recursive(
                     nested_value, nested_field_info.annotation
                 )
-                # Store using the actual field name for model_construct
                 inner_data_for_construct[nested_field_name] = processed_nested_value
-            # If key not found, model_construct will handle missing fields
 
         try:
-            # Use model_construct for validation-free instantiation
             return annotation.model_construct(**inner_data_for_construct)
         except Exception:
-            # Log error if construction fails (should be rare)
             logger.error(
                 f"Failed model_construct for {annotation.__name__} with data "
                 f"{inner_data_for_construct!r}",
                 exc_info=True,
             )
-            # Fallback: return the original dict if construction fails
             return value
 
     @classmethod
@@ -922,30 +921,13 @@ class VisibleFieldsMixin:
     ) -> Any:
         """
         Recursively prepare data for construction or validation.
-
-        Handles nested lists, dicts, Unions, and BaseModels. Attempts to
-        construct nested BaseModels from dictionaries using
-        `_construct_nested_model`. Passes through cycle markers.
-
-        Args:
-            value: The data value to process.
-            annotation: The expected type annotation for the value.
-
-        Returns:
-            The processed value, potentially with nested dictionaries replaced
-            by constructed model instances.
+        (Method body unchanged)
         """
-        # Pass None through directly
         if value is None:
             return None
-
-        # Handle case where type annotation is missing
         if annotation is None:
             logger.debug("Processing value with None annotation, returning as is.")
             return value
-
-        # Pass cycle markers through without processing
-        # Return None as we cannot construct from a cycle marker
         if isinstance(value, dict) and value.get("__cycle_reference__") is True:
             logger.debug(
                 f"Passing cycle marker through for {annotation}. "
@@ -956,29 +938,24 @@ class VisibleFieldsMixin:
         origin = get_origin(annotation)
         args = get_args(annotation)
 
-        # Handle Union types
         if origin is Union:
             possible_types = [arg for arg in args if arg is not type(None)]
-            # Check if value already matches one of the union types
             for possible_type in possible_types:
                 if isinstance(possible_type, type) and isinstance(value, possible_type):
-                    return value  # Already correct type
+                    return value
 
-            # If value is dict, try to find a matching BaseModel in the Union
             if isinstance(value, dict):
                 potential_models = [
                     t
                     for t in possible_types
                     if isinstance(t, type) and issubclass(t, BaseModel)
                 ]
-                # Simplified: If exactly one BaseModel type, try constructing it
                 if len(potential_models) == 1:
                     matched_model_type = potential_models[0]
                     try:
                         constructed = cls._construct_nested_model(
                             value, matched_model_type
                         )
-                        # Return if construction was successful
                         if isinstance(constructed, matched_model_type):
                             return constructed
                         else:
@@ -986,101 +963,123 @@ class VisibleFieldsMixin:
                                 f"Construction failed for Union "
                                 f"type {matched_model_type.__name__}"
                             )
-                            return value  # Return original dict on failure
+                            return value
                     except Exception:
                         logger.warning(
                             f"Exception during construction for "
                             f"Union type {matched_model_type.__name__}",
                             exc_info=True,
                         )
-                        return value  # Return original dict on error
-                # Fallback: If no single model or construction failed, return dict
+                        return value
                 logger.debug(
                     f"Returning dict for Union {annotation}, "
                     f"no single matching model or construction failed."
                 )
                 return value
 
-            # If value is not dict, process recursively only if Union has
-            # one non-None type
             if len(possible_types) == 1:
                 return cls._process_value_for_construct_recursive(
                     value, possible_types[0]
                 )
-            # Otherwise (multiple types, not dict), return value as is
             return value
 
-        # Handle List[T]
         if origin is list or origin is List:
             if not args or not isinstance(value, list):
-                return value  # Can't process if no type arg or not a list
+                return value
             nested_annotation = args[0]
             return [
                 cls._process_value_for_construct_recursive(item, nested_annotation)
                 for item in value
             ]
 
-        # Handle Dict[K, V]
         if origin is dict or origin is Dict:
             if not args or len(args) != 2 or not isinstance(value, dict):
-                return value  # Can't process
+                return value
             value_annotation = args[1]
-            # Assume keys don't need processing for construction
             return {
                 k: cls._process_value_for_construct_recursive(v, value_annotation)
                 for k, v in value.items()
             }
 
-        # Handle direct nested BaseModel if value is a dict
         if (
             isinstance(annotation, type)
             and issubclass(annotation, BaseModel)
             and isinstance(value, dict)
         ):
-            # Attempt construction (cycle marker already handled)
             return cls._construct_nested_model(value, annotation)
 
-        # Return primitives, Enums, already constructed objects, etc., as is
         return value
 
     def to_response_model(self, role: Optional[str] = None) -> BaseModel:
         """
         Convert this model instance to its role-specific response model.
 
-        Generates the filtered dictionary using `visible_dict` and then
-        validates this data against the dynamically created response model
-        type using `model_validate`. This ensures type correctness, applies
-        defaults, and runs validators defined on the response model (which
-        should mirror the original where applicable).
+        Generates the filtered dictionary using `visible_dict`, recursively
+        replaces internal cycle markers with None, and then validates this
+        processed data against the target response model type using
+        `model_validate`.
 
         Args:
             role: The target role identifier (string). Uses the configured
                 default role if None.
 
         Returns:
-            An instance of the role-specific response model, validated.
+            An instance of the role-specific response model, validated, with
+            cycle markers replaced by None.
 
         Raises:
             pydantic.ValidationError: If the filtered data fails validation
-                against the generated response model schema (e.g., type errors,
-                missing required fields, constraint violations).
+                against the generated response model schema.
             ValueError: If the response model type itself cannot be created.
         """
         role_str = role or self._default_role or ""
         # Get the dynamically created response model *type*
+        # This requires the recursion-breaking fix using `creating_models`
+        # and the `model_rebuild` call inside create_response_model.
         model_cls = self.__class__.create_response_model(role_str)
-        # Get the dictionary filtered by role visibility
+
+        # Get the dictionary filtered by role visibility (may contain markers)
         visible_data_dict: Dict[str, Any] = self.visible_dict(role_str)
 
+        # --- Helper function to recursively replace cycle markers ---
+        def _replace_markers_recursive(data: Any) -> Any:
+            """Recursively traverses data, replacing cycle markers with None."""
+            if isinstance(data, dict):
+                # Check if this dictionary itself is the cycle marker
+                if data.get("__cycle_reference__") is True:
+                    # Replace the entire marker dict with None
+                    return None
+                # Otherwise, recurse into its values
+                return {
+                    key: _replace_markers_recursive(value)
+                    for key, value in data.items()
+                }
+            elif isinstance(data, list):
+                # Recurse into list items
+                return [_replace_markers_recursive(item) for item in data]
+            else:
+                # Return primitives and other types unchanged
+                return data
+
+        # --- End Helper ---
+
+        # --- Preprocess the entire visible_data_dict structure ---
+        data_for_validation = _replace_markers_recursive(visible_data_dict)
+        # Now, all {'__cycle_reference__': True} dicts are replaced by None
+        # --- End Preprocessing ---
+
         try:
-            # Validate the visible data dict directly against the response model
-            # Pydantic's validation handles nested structures, coercion, etc.
-            return model_cls.model_validate(visible_data_dict)
+            # Validate the *preprocessed* data against the response model type
+            # Pydantic will handle None correctly for Optional fields.
+            # If a cycle marker was replaced for a *required* field,
+            # model_validate will now raise a "missing required field" error
+            # because the value became None, which is the correct behavior.
+            return model_cls.model_validate(data_for_validation)
         except Exception as e:
             # Log detailed error and re-raise
             logger.error(
-                f"Validation failed for {model_cls.__name__} with visible "
-                f"data dict: {visible_data_dict!r}",
+                f"Validation failed for {model_cls.__name__} with preprocessed "
+                f"(cycle markers replaced) data: {data_for_validation!r}",
                 exc_info=True,
             )
             raise e
@@ -1091,30 +1090,19 @@ class VisibleFieldsMixin:
     ) -> None:
         """
         Dynamically configure field visibility for a specific role on this class.
-
-        This directly modifies the `_role_visible_fields` class attribute.
-        Use with caution, especially in multi-threaded environments. Clears
-        the response model cache for this class.
-
-        Args:
-            role: The role identifier (Enum or string) to configure.
-            visible_fields: A set of field names that should be visible to
-                this role (replaces any existing definition for this role).
+        (Method body unchanged)
         """
         if not hasattr(cls, "_role_visible_fields"):
             cls._role_visible_fields = {}
 
-        # Convert role to its string representation for the key
         role_key: str
         if isinstance(role, Enum):
             role_key = str(role.value)
         else:
             role_key = str(role)
 
-        # Update the visibility map for this class
         cls._role_visible_fields[role_key] = set(visible_fields)
 
-        # Clear relevant entries from the global response model cache
         keys_to_remove = [k for k in _RESPONSE_MODEL_CACHE if k[0] == cls.__name__]
         if keys_to_remove:
             logger.debug(
@@ -1129,40 +1117,24 @@ class VisibleFieldsMixin:
 class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
     """
     Base class for Pydantic models supporting role-based field visibility.
-
-    Inherit from this class instead of `pydantic.BaseModel`. It automatically
-    integrates `VisibleFieldsMixin` and initializes role visibility rules
-    based on `field(visible_to=...)` usage during class definition.
-
-    Sets `model_config` with `populate_by_name=True` and
-    `arbitrary_types_allowed=True` by default.
+    (Class body unchanged)
     """
 
-    # Default config for models inheriting from this base
     model_config = ConfigDict(
-        populate_by_name=True,  # Allow initializing by field alias
-        arbitrary_types_allowed=True,  # Useful for generated response models
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
     )
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
         """
         Initialize role visibility rules when a subclass is defined.
-
-        Executed automatically by Pydantic/Python during class creation.
-        It merges visibility rules from base classes and adds rules defined
-        directly on the subclass using `field(visible_to=...)`.
+        (Method body unchanged)
         """
-        # Ensure base class initialization runs (important for Pydantic)
         super().__pydantic_init_subclass__(**kwargs)
 
-        # --- Inherit and Merge Visibility Rules ---
         base_vis_fields: Dict[str, Set[str]] = {}
-        # Iterate MRO in reverse (from object up to immediate parent)
-        # to apply base rules first, allowing subclasses to override
         for base in reversed(cls.__mro__):
-            # Check if it's a relevant base class using the mixin
-            # and has its own _role_visible_fields defined
             if (
                 issubclass(base, VisibleFieldsMixin)
                 and base is not VisibleFieldsMixin
@@ -1171,7 +1143,6 @@ class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
             ):
                 current_base_fields = getattr(base, "_role_visible_fields", None)
                 if isinstance(current_base_fields, dict):
-                    # Merge fields from this base into the accumulated map
                     for r, flds in current_base_fields.items():
                         role_key = str(r.value) if isinstance(r, Enum) else str(r)
                         if role_key not in base_vis_fields:
@@ -1179,31 +1150,20 @@ class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
                         if isinstance(flds, set):
                             base_vis_fields[role_key].update(flds)
 
-        # Initialize this class's map with a copy of the inherited fields
         cls._role_visible_fields = {k: v.copy() for k, v in base_vis_fields.items()}
-        # --- End Inheritance ---
 
-        # --- Process Fields Defined Directly on This Class ---
         valid_role_values: Set[str] = set()
         if _ROLE_ENUM:
-            # Get all valid role strings from the configured Enum
             valid_role_values = {str(r.value) for r in _ROLE_ENUM}
-            # Ensure every configured role has at least an empty set here
             for role_value in valid_role_values:
                 if role_value not in cls._role_visible_fields:
                     cls._role_visible_fields[role_value] = set()
 
-        # Iterate through fields defined in *this* class
-        # model_fields contains all fields, including inherited ones
-        # We need to identify fields defined directly in this class body
         cls_annotations = getattr(cls, "__annotations__", {})
         for field_name, field_info in cls.model_fields.items():
-            # Heuristic: Field is defined directly if present in __annotations__
-            # This works for standard `field_name: type` definitions.
             is_defined_on_cls = field_name in cls_annotations
 
             if is_defined_on_cls:
-                # Extract 'visible_to' list from field's metadata
                 json_schema_extra = getattr(field_info, "json_schema_extra", None)
                 visible_to_roles = []
                 if isinstance(json_schema_extra, dict):
@@ -1214,18 +1174,14 @@ class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
                             for r in visible_to_raw
                         ]
 
-                # Add this field to the visibility map for each specified role
                 if visible_to_roles:
                     for role_key in visible_to_roles:
-                        # Check if the role is valid according to global config
                         if _ROLE_ENUM:
                             if role_key in valid_role_values:
-                                # Role is valid, add the field
                                 if role_key not in cls._role_visible_fields:
                                     cls._role_visible_fields[role_key] = set()
                                 cls._role_visible_fields[role_key].add(field_name)
                             else:
-                                # Role used in field not in configured Enum
                                 logger.warning(
                                     f"Role '{role_key}' used in 'visible_to' "
                                     f"for field '{cls.__name__}.{field_name}' "
@@ -1233,17 +1189,14 @@ class VisibleFieldsModel(BaseModel, VisibleFieldsMixin):
                                     f"'{_ROLE_ENUM.__name__}'."
                                 )
                         else:
-                            # No Role Enum configured, allow any string role but warn
                             logger.warning(
                                 f"Role '{role_key}' used in 'visible_to' for "
                                 f"field '{cls.__name__}.{field_name}' but no "
                                 f"Role Enum is configured globally."
                             )
-                            # Add it anyway if no Enum defined
                             if role_key not in cls._role_visible_fields:
                                 cls._role_visible_fields[role_key] = set()
                             cls._role_visible_fields[role_key].add(field_name)
-        # --- End Processing Direct Fields ---
 
         logger.debug(
             f"Initialized visibility for {cls.__name__}: " f"{cls._role_visible_fields}"

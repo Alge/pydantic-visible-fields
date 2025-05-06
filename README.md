@@ -1,24 +1,30 @@
+Okay, let's update the README to accurately reflect the current state, including the capabilities and the important limitation regarding module-level dynamic model creation for documentation purposes.
+
+```markdown
 # Pydantic Visible Fields
 
-A flexible field-level visibility control system for Pydantic models. This library allows you to define which fields of your models are visible to different user roles, making it easy to implement role-based access control at the data model level.
+A flexible field-level visibility control system for Pydantic models. This library allows you to define which fields of your models are visible to different user roles, making it easy to implement role-based access control at the data model level, especially for API responses.
 
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2.0+-green.svg)](https://docs.pydantic.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PyPI version](https://badge.fury.io/py/pydantic-visible-fields.svg)](https://badge.fury.io/py/pydantic-visible-fields)
+[![Downloads](https://static.pepy.tech/badge/pydantic-visible-fields)](https://pepy.tech/project/pydantic-visible-fields)
 
 ## Overview
 
-`pydantic-visible-fields` provides a simple way to control which fields of your Pydantic models are visible to different user roles. It is particularly useful for API responses where you want to return different data depending on the user's role.
+`pydantic-visible-fields` provides a simple way to control which fields of your Pydantic models are included when generating responses, based on user roles. It dynamically creates filtered Pydantic models at runtime, ensuring type safety for the visible data.
 
-It also provides a `PaginatedResponse` class which makes it easy to generate paginated user responses with automatic conversion of objects to the correct visibility level.
+It also provides a `PaginatedResponse` class which makes it easy to generate paginated API responses with automatic conversion of objects to the correct visibility level.
+
 ### Key Features
 
-- 🔒 **Field-level visibility control** using a simple decorator
-- 🧩 **Class-level visibility control** for more complex scenarios
-- 👥 **Role inheritance** to simplify permission management
-- 🔄 **Nested model support** with full recursive visibility control
-- 🌲 **Circular reference handling** to safely process complex object graphs
-- 🚀 **Simple integration** with FastAPI and other web frameworks
+- **Field-level visibility control** using a simple `field` decorator.
+- **Role inheritance** support to define hierarchical permissions.
+- **Nested model support** with full recursive visibility filtering.
+- **Circular reference handling** replacing cycles with `None` in the output.
+- **Pydantic V2 Compatible** leveraging modern Pydantic features.
+- **Simple integration** with FastAPI and other web frameworks via a helper function.
 
 ## Installation
 
@@ -30,7 +36,7 @@ pip install pydantic-visible-fields
 
 ### 1. Define Your Roles
 
-First, define your roles as an enum:
+First, define your application's roles using Python's `Enum`:
 
 ```python
 from enum import Enum
@@ -43,7 +49,7 @@ class Role(str, Enum):
 
 ### 2. Configure Role System
 
-Configure the role inheritance hierarchy:
+Configure the role system once, usually at application startup. Define inheritance (e.g., ADMIN inherits EDITOR's visibility) and an optional default role.
 
 ```python
 from pydantic_visible_fields import configure_roles
@@ -51,16 +57,16 @@ from pydantic_visible_fields import configure_roles
 configure_roles(
     role_enum=Role,
     inheritance={
-        Role.ADMIN: [Role.EDITOR],
-        Role.EDITOR: [Role.VIEWER],
+        Role.ADMIN: [Role.EDITOR], # Admin sees what Editor sees
+        Role.EDITOR: [Role.VIEWER], # Editor sees what Viewer sees
     },
-    default_role=Role.VIEWER
+    default_role=Role.VIEWER # Role used if none is specified
 )
 ```
 
 ### 3. Create Models with Visibility Rules
 
-Use the `VisibleFieldsModel` base class and `field` decorator to control field visibility:
+Inherit from `VisibleFieldsModel` and use the custom `field` function to specify which roles can see each field via the `visible_to` argument.
 
 ```python
 from pydantic_visible_fields import VisibleFieldsModel, field
@@ -68,33 +74,44 @@ from pydantic_visible_fields import VisibleFieldsModel, field
 class User(VisibleFieldsModel):
     id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
     username: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
-    email: str = field(visible_to=[Role.EDITOR, Role.ADMIN])
-    hashed_password: str = field(visible_to=[Role.ADMIN])
-    is_active: bool = field(visible_to=[Role.ADMIN])
+    email: str = field(visible_to=[Role.EDITOR, Role.ADMIN]) # Only Editor and Admin
+    hashed_password: str = field(visible_to=[Role.ADMIN]) # Only Admin
+    is_active: bool = field(visible_to=[Role.ADMIN]) # Only Admin
 ```
 
-### 4. Use in API Responses
+### 4. Use in API Responses (Runtime Filtering)
 
-In your API handlers, convert models to role-specific responses:
+In your API endpoint or application logic, use the `visible_fields_response` helper function to convert your model instance into a role-specific response just before returning it.
 
 ```python
-from fastapi import Depends
+from fastapi import FastAPI, Depends
+from typing import Any # Use Any for dynamic return type
 from pydantic_visible_fields import visible_fields_response
+# Assume User model, Role enum, configure_roles, get_user_by_id, get_current_user_role exist
+
+app = FastAPI()
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: str, current_user = Depends(get_current_user)):
-    user = await get_user_by_id(user_id)
+async def get_user(user_id: str, current_user_role: Role = Depends(get_current_user_role)) -> Any:
+    user: User = await get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    # Return different fields based on user's role
-    role = get_user_role(current_user)
-    return visible_fields_response(user, role=role)
+    # Convert the full user model to a filtered response based on the role
+    # This dynamically generates and validates the correct response model instance.
+    response_data = visible_fields_response(user, role=current_user_role)
+    return response_data
 ```
+
+This approach ensures that complex models with forward references or cycles work reliably, as the response model generation happens at runtime when all types are defined.
+
+**Note on FastAPI Documentation:** When using `visible_fields_response`, the return type hint in your endpoint (`-> Any`) won't allow FastAPI to generate precise OpenAPI documentation for the different role-specific response schemas. See the "FastAPI Integration & Documentation" section for strategies to improve documentation if needed.
 
 ## Advanced Usage
 
-### Class-Level Visibility
+### Class-Level Visibility (Alternative)
 
-For more complex scenarios, you can define visibility at the class level:
+Instead of decorating each field, you can define visibility rules at the class level using the `VisibleFieldsMixin` and a `_role_visible_fields` class variable. Note that field-level `visible_to` takes precedence if both are used.
 
 ```python
 from pydantic import BaseModel
@@ -102,10 +119,11 @@ from pydantic_visible_fields import VisibleFieldsMixin
 from typing import ClassVar, Dict, Set
 
 class UserSettings(BaseModel, VisibleFieldsMixin):
+    # Map role *string values* to sets of visible field names
     _role_visible_fields: ClassVar[Dict[str, Set[str]]] = {
-        Role.VIEWER: {"id", "theme"},
-        Role.EDITOR: {"notifications"},
-        Role.ADMIN: {"advanced_options", "debug_mode"},
+        Role.VIEWER.value: {"id", "theme"},
+        Role.EDITOR.value: {"notifications"}, # Editor also inherits Viewer's fields
+        Role.ADMIN.value: {"advanced_options", "debug_mode"}, # Admin inherits Editor/Viewer
     }
 
     id: str
@@ -113,11 +131,14 @@ class UserSettings(BaseModel, VisibleFieldsMixin):
     notifications: bool
     advanced_options: dict
     debug_mode: bool
+
+    # Need to explicitly call model_rebuild if using ForwardRefs within the class
+    model_rebuild()
 ```
 
 ### Nested Models
 
-Visibility control works recursively with nested models:
+Visibility filtering automatically applies recursively to nested models that also inherit from `VisibleFieldsModel` or `VisibleFieldsMixin`.
 
 ```python
 class Address(VisibleFieldsModel):
@@ -128,129 +149,89 @@ class Address(VisibleFieldsModel):
 
 class FullUser(VisibleFieldsModel):
     id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
-    username: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
-    email: str = field(visible_to=[Role.EDITOR, Role.ADMIN])
+    # ... other user fields ...
+    # The address field itself is visible to all, but the *content* of the
+    # Address object will be filtered based on the role when processed.
     address: Address = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
 ```
 
+A Viewer requesting a `FullUser` would see the `address` field containing an `Address` object with only the `city` and `country` fields populated.
+
 ### Working with Collections
 
-Visibility control works with lists and dictionaries of models:
+Visibility filtering also works automatically for models within `List` and `Dict` structures.
 
 ```python
+from typing import List, Dict
+
+# Assume User and Setting models are defined using VisibleFieldsModel/Mixin
 class Team(VisibleFieldsModel):
     id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
     name: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
+    # Each User object in this list will be filtered based on the role
     members: List[User] = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
+    # Each Setting object in this dict's values will be filtered
     settings: Dict[str, Setting] = field(visible_to=[Role.EDITOR, Role.ADMIN])
 ```
 
+### Circular References
+
+The library handles circular object references safely. When converting to a dictionary (`visible_dict`) or response model (`to_response_model`), cycles are detected, and the reference causing the loop is replaced with `None` in the final output object instance if the field type allows it (e.g., `Optional[...]`).
+
 ### Dynamic Visibility Configuration
 
-You can dynamically configure visibility rules:
+You can dynamically update visibility rules for a class *after* initial definition using `configure_visibility`. **Note:** This modifies the class directly and is generally not thread-safe. It also clears the internal cache for response models associated with that class.
 
 ```python
-# Add a field to the VIEWER role
-User.configure_visibility(Role.VIEWER.value, {"id", "username", "email"})
+# Make 'email' visible to VIEWER role for the User class dynamically
+User.configure_visibility(Role.VIEWER, {"id", "username", "email"})
 
-# Change all visible fields for ADMIN
-User.configure_visibility(Role.ADMIN.value, {"id", "username", "email", "hashed_password", "is_active", "last_login"})
+# Overwrite all fields visible to ADMIN
+User.configure_visibility(Role.ADMIN, {"id", "username", "email", "hashed_password", "is_active"})
 ```
 
-## FastAPI Integration Example
+## FastAPI Integration & Documentation
 
-Here's a complete example of how to use the library with FastAPI:
+The recommended way to use this library with FastAPI is to use the `visible_fields_response` helper function within your endpoint logic before returning the data, as shown in the Basic Usage example.
 
-```python
-from enum import Enum
-from fastapi import FastAPI, Depends, HTTPException
-from typing import List
+**Challenge:** FastAPI generates OpenAPI documentation based on static type hints provided in the `response_model` parameter of route decorators. Since the actual response model type generated by `visible_fields_response` depends on the *runtime* role, using a static hint like `response_model=User` will show the full model in docs, while `response_model=Any` provides no schema detail.
 
-from pydantic_visible_fields import (
-    VisibleFieldsModel, visible_fields_response, field, configure_roles
-)
+**Strategies for Documentation:**
 
-# Define roles
-class Role(str, Enum):
-    PUBLIC = "public"
-    USER = "user"
-    ADMIN = "admin"
+1.  **Accept Less Specific Docs:** Use `response_model=Any` or `response_model=YourBaseModel` in the decorator and rely on the `summary`/`description` fields or manually added OpenAPI `responses` information to clarify the different role-based outputs. Runtime filtering still works correctly.
+2.  **Manually Define Response Models:** For endpoints where precise documentation is critical, manually define the specific response model variations (e.g., `UserAdminResponse`, `UserUserResponse`) in your code. Use these static models in the `response_model` decorator. You can still use `visible_fields_response` at runtime for consistent filtering logic, or map data manually. This duplicates effort but gives accurate static docs.
 
-# Configure role system
-configure_roles(
-    role_enum=Role,
-    inheritance={
-        Role.ADMIN: [Role.USER],
-        Role.USER: [Role.PUBLIC],
-    },
-    default_role=Role.PUBLIC
-)
+**Module-Level Creation Limitation:**
 
-# Models with visibility rules
-class Item(VisibleFieldsModel):
-    id: int = field(visible_to=[Role.PUBLIC, Role.USER, Role.ADMIN])
-    name: str = field(visible_to=[Role.PUBLIC, Role.USER, Role.ADMIN])
-    description: str = field(visible_to=[Role.USER, Role.ADMIN])
-    price: float = field(visible_to=[Role.USER, Role.ADMIN])
-    cost: float = field(visible_to=[Role.ADMIN])
-    supplier: str = field(visible_to=[Role.ADMIN])
-
-# Sample database
-items_db = [
-    Item(id=1, name="Item 1", description="Description 1", price=10.99, cost=5.50, supplier="Supplier A"),
-    Item(id=2, name="Item 2", description="Description 2", price=20.99, cost=12.75, supplier="Supplier B"),
-]
-
-# FastAPI app
-app = FastAPI()
-
-# Dependency to get user role (in a real app, this would use auth logic)
-def get_user_role(role_name: str = "public"):
-    if role_name == "admin":
-        return Role.ADMIN
-    elif role_name == "user":
-        return Role.USER
-    return Role.PUBLIC
-
-@app.get("/items/", response_model=List)
-async def get_items(role = Depends(get_user_role)):
-    # Convert items to role-specific responses
-    return [visible_fields_response(item, role=role) for item in items_db]
-
-@app.get("/items/{item_id}")
-async def get_item(item_id: int, role = Depends(get_user_role)):
-    for item in items_db:
-        if item.id == item_id:
-            # Return different fields based on user's role
-            return visible_fields_response(item, role=role)
-    raise HTTPException(status_code=404, detail="Item not found")
-```
+Due to limitations in Python's import system and Pydantic's Forward Reference resolution, **calling `YourModel.create_response_model(role)` directly at the module level is strongly discouraged and likely to fail** if your models involve complex forward references or cyclic dependencies (e.g., `Optional["MyUnion"]` where `MyUnion` is defined later or contains forward references). Please use the runtime `visible_fields_response` approach instead.
 
 ## API Reference
 
 ### Core Classes
 
-- `VisibleFieldsModel` - Base model class with field-level visibility control
-- `VisibleFieldsMixin` - Mixin class that can be added to any Pydantic model
-- `PaginatedResponse` - Class for handling pagination, automatically converts models to the correct visibility level
+-   `VisibleFieldsModel`: Inherit from this instead of `pydantic.BaseModel` to use the `field` decorator for visibility.
+-   `VisibleFieldsMixin`: Mixin to add visibility features to existing `pydantic.BaseModel` classes (use with class-level `_role_visible_fields`).
+-   `PaginatedResponse`: Generic model for paginated API responses (see `pydantic_visible_fields.paginatedresponse`).
 
 ### Functions
 
-- `field(visible_to=None, **kwargs)` - Field decorator to specify visibility
-- `configure_roles(role_enum, inheritance=None, default_role=None)` - Configure the role system
-- `visible_fields_response(model, role=None)` - Create a response with only visible fields
+-   `field(*, visible_to: Optional[List[Any]] = None, **kwargs) -> Any`: Pydantic field replacement enabling `visible_to`.
+-   `configure_roles(*, role_enum: Type[Enum], inheritance: Optional[Dict[Any, Any]] = None, default_role: Optional[Union[Enum, str]] = None) -> None`: Configures the global role system. Must be called once at startup.
+-   `visible_fields_response(model: Any, role: Any = None) -> Any`: Runtime helper to convert a model instance (or list/dict of instances) to its role-specific filtered response.
 
-### Methods
+### Methods (on `VisibleFieldsMixin` / `VisibleFieldsModel` instances/classes)
 
-- `model.visible_dict(role=None)` - Convert a model to a dictionary with only visible fields
-- `model.to_response_model(role=None)` - Convert a model to a response model class
-- `Model.configure_visibility(role, visible_fields)` - Configure visibility rules for a role
+-   `model_instance.visible_dict(role=None) -> Dict[str, Any]`: Returns a dictionary containing only fields visible to the role (internal cycle marker `{'__cycle_reference__': True}` used).
+-   `model_instance.to_response_model(role=None) -> BaseModel`: Returns a validated Pydantic model instance containing only fields visible to the role (cycles replaced with `None`). **Use `visible_fields_response` helper function for most use cases.**
+-   `ModelCls.create_response_model(role: str, model_name_suffix: str = "Response") -> Type[BaseModel]`: Dynamically creates the Pydantic model *type* for a given role. **Avoid calling at module level for complex models; prefer using `visible_fields_response` at runtime.**
+-   `ModelCls.configure_visibility(role: Union[Enum, str], visible_fields: Set[str]) -> None`: Dynamically updates visibility rules for a class (not thread-safe).
 
 ## Development
 
 ### Increasing version numbers
-Use `bump2version` to increase the version number (included in the dev dependencies).
+
+Use `bump2version` to increase the version number (included in the dev dependencies). E.g., `bump2version patch` or `bump2version minor`.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the `LICENSE` file for details.

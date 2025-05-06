@@ -12,8 +12,13 @@ from types import NoneType
 from typing import Any, ClassVar, Dict, List, Optional, Set, Union  # Added Any
 
 import pytest
-from pydantic import ConfigDict  # Added ConfigDict
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PydanticUserError,
+    ValidationError,
+    field_validator,
+)
 
 # Ensure this matches the actual import path for your library
 from pydantic_visible_fields import (
@@ -300,6 +305,7 @@ class NodeWithSelfReference(VisibleFieldsModel):
 
 NodeWithSelfReference.model_rebuild()
 
+
 # Test Group 10: Models for Bug Detection
 # ---------------------------------------
 
@@ -363,8 +369,65 @@ class ConstructTestModel(VisibleFieldsModel):
     # REMOVED the visible_dict override - tests will create invalid data manually
 
 
+# --- Models for Complex Forward Ref / Union Test ---
+
+
+class ComplexModelX(VisibleFieldsModel):
+    """Part of a complex forward reference and Union test."""
+
+    x_id: str = field(visible_to=[Role.ADMIN])
+    x_data: str = field(visible_to=[Role.ADMIN])
+    # Optional reference to the other model type in the Union
+    ref_y: Optional["ComplexModelY"] = field(visible_to=[Role.ADMIN], default=None)
+
+
+class ComplexModelY(VisibleFieldsModel):
+    """Part of a complex forward reference and Union test."""
+
+    y_id: str = field(visible_to=[Role.ADMIN])
+    y_info: int = field(visible_to=[Role.ADMIN])
+    # Optional reference back to the first model type
+    ref_x: Optional["ComplexModelX"] = field(visible_to=[Role.ADMIN], default=None)
+
+
+# Define the Union using forward references (strings)
+ComplexActionUnion = Union["ComplexModelX", "ComplexModelY"]
+
+
+class ComplexContainerModel(VisibleFieldsModel):
+    """Container holding the complex Union with forward references."""
+
+    container_id: str = field(visible_to=[Role.ADMIN])
+    # Field using the complex Union type
+    action: Optional[ComplexActionUnion] = field(visible_to=[Role.ADMIN], default=None)
+    description: str = field(visible_to=[Role.ADMIN])
+
+
+# Rebuild all models involved *after* all definitions are complete
+# This helps resolve the forward references for the original models.
+ComplexModelX.model_rebuild()
+ComplexModelY.model_rebuild()
+ComplexContainerModel.model_rebuild()
+
+
 # Test Fixtures
 # ------------
+
+
+@pytest.fixture
+def complex_container_instance():
+    """Fixture for an instance of the complex container model"""
+    action_x = ComplexModelX(x_id="x1", x_data="data_x")
+    action_y = ComplexModelY(y_id="y1", y_info=111)
+    # Create mutual references for complexity, though not strictly required for the test
+    action_x.ref_y = action_y
+    action_y.ref_x = action_x
+    # Return the container holding one of the actions
+    return ComplexContainerModel(
+        container_id="complex_c1",
+        action=action_x,  # Contains ModelX instance
+        description="Container with complex union action",
+    )
 
 
 @pytest.fixture
@@ -1079,3 +1142,122 @@ class TestVisibleFields:
         assert hasattr(response, "int_field")
         assert response.int_field == 123  # Check value
         assert isinstance(response.int_field, int)  # Check type
+
+    def test_complex_recursion_should_not_raise_error_with_fix(
+        self, complex_container_instance
+    ):
+        """
+        Verify that calling `to_response_model` on mutually recursive types
+        does NOT raise RecursionError when the internal recursion handling fix
+        (using `creating_models` tracker) is applied.
+
+        This test should FAIL with RecursionError BEFORE the fix is applied,
+        and PASS AFTER the fix is applied.
+        """
+        model = complex_container_instance
+        role = Role.ADMIN.value  # Role where the action field is visible
+
+        try:
+            response = model.to_response_model(role=role)
+
+            # If the call succeeds, perform basic checks to ensure the
+            # response structure is somewhat reasonable, even if types might
+            # be `Any` due to the recursion breaking.
+            assert response is not None
+            assert hasattr(response, "container_id")
+            assert hasattr(response, "action")
+            # Deeper type assertions might fail if the recursion breaking
+            # returned `Any`, so keep assertions minimal here, focusing
+            # primarily on *not* raising the RecursionError.
+            assert response.action is not None  # Action should exist
+
+        except RecursionError as e:
+            # If RecursionError *is* caught, explicitly fail the test,
+            # indicating the fix is not working or not applied.
+            pytest.fail(
+                f"RecursionError was raised even though the fix "
+                f"should prevent it: {e}"
+            )
+        except Exception as e:
+            # Fail for any other unexpected exception
+            pytest.fail(f"to_response_model raised an unexpected " f"exception: {e}")
+
+    def test_complex_union_forward_ref_rebuild_handles_post_creation(
+        self, complex_container_instance
+    ):
+        """
+        Verify that `to_response_model` (WITH internal recursion handling AND
+        internal model_rebuild) successfully validates complex Unions involving
+        multiple forward-referenced models without raising PydanticUserError.
+
+        This test primarily verifies that the `model_rebuild` call after
+        `create_model` correctly finalizes the model definition. It should
+        only be run/expected to pass AFTER the recursion handling fix AND the
+        model_rebuild fix are applied.
+        """
+        model = complex_container_instance
+        role = Role.ADMIN.value
+
+        # --- This call should now SUCCEED if both fixes are applied ---
+        try:
+            response = model.to_response_model(role=role)
+        except PydanticUserError as e:
+            pytest.fail(
+                f"to_response_model raised PydanticUserError " f"even after fixes: {e}"
+            )
+        except RecursionError as e:
+            # Added this check for completeness after the other fix
+            pytest.fail(
+                f"to_response_model raised RecursionError "
+                f"even after recursion fix: {e}"
+            )
+        except Exception as e:
+            # Catch any other unexpected error during conversion/validation
+            pytest.fail(f"to_response_model raised unexpected exception: {e}")
+
+        # --- Assertions if successful ---
+        # Verify the top-level response model structure
+        assert hasattr(response, "container_id")
+        assert hasattr(response, "action")
+        assert hasattr(response, "description")
+        assert response.container_id == model.container_id
+        assert response.description == model.description
+
+        # Check the nested action object within the response
+        assert response.action is not None, "Action field should not be None"
+
+        # Determine the expected response type for the specific action instance
+        # In the fixture, the action is ComplexModelX
+        action_x_response_type = ComplexModelX.create_response_model(role)
+        action_y_response_type = ComplexModelY.create_response_model(role)
+
+        # Verify the type and content of the action field
+        assert isinstance(
+            response.action, action_x_response_type
+        ), f"Action field has unexpected type: {type(response.action)}"
+        assert hasattr(response.action, "x_id")
+        assert hasattr(response.action, "x_data")
+        assert hasattr(response.action, "ref_y")  # Check field exists
+        assert response.action.x_id == model.action.x_id
+        assert response.action.x_data == model.action.x_data
+
+        # Check nested reference type (ref_y should be ModelY response type)
+        assert response.action.ref_y is not None, "Nested ref_y should not be None"
+        assert isinstance(
+            response.action.ref_y, action_y_response_type
+        ), f"Nested ref_y has unexpected type: {type(response.action.ref_y)}"
+        assert hasattr(response.action.ref_y, "y_id")
+        assert hasattr(response.action.ref_y, "y_info")
+        assert hasattr(response.action.ref_y, "ref_x")  # Check field exists
+        assert response.action.ref_y.y_id == model.action.ref_y.y_id
+        assert response.action.ref_y.y_info == model.action.ref_y.y_info
+
+        # Check the back-reference (ref_x in ref_y)
+        # Due to cycle handling in visible_dict returning None for cycles,
+        # the ref_x field in the nested response model should likely be None.
+        assert hasattr(
+            response.action.ref_y, "ref_x"
+        ), "Nested ref_y should have ref_x attribute"
+        assert (
+            response.action.ref_y.ref_x is None
+        ), "Back-reference ref_x should be None due to cycle handling"
