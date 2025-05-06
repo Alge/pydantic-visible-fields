@@ -1,6 +1,6 @@
 """Field-level visibility control for Pydantic models."""
 
-import logging # Import logging
+import logging  # Import logging
 
 from pydantic_visible_fields.core import (
     VisibleFieldsMixin,
@@ -9,15 +9,15 @@ from pydantic_visible_fields.core import (
     field,
     visible_fields_response,
 )
+
 # Import pagination functions if they should be part of the public API
 from pydantic_visible_fields.paginatedresponse import (
     PaginatedResponse,
-    from_iterable,
     from_async_iterable,
+    from_iterable,
 )
 
-
-__version__ = "0.2.4" # Update version if changes warrant it
+__version__ = "0.2.4"  # Update version if changes warrant it
 __all__ = [
     # Core components
     "VisibleFieldsMixin",

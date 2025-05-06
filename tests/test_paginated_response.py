@@ -358,12 +358,16 @@ class TestPaginatedResponse:
         assert response.offset == 5
         assert response.has_more is False  # Cannot determine
         assert response.next_offset == 8
-        assert response.data[0].id == test_items[
-            5].id  # Check correct items were processed
+        assert (
+            response.data[0].id == test_items[5].id
+        )  # Check correct items were processed
         assert response.data[1].id == test_items[6].id
 
     def test_offset_has_no_functional_effect(self, test_items):
-        """Test that changing the offset parameter doesn't affect the data returned when using from_iterable on a pre-sliced list"""
+        """
+        Test that changing the offset parameter doesn't affect the data returned
+        when using from_iterable on a pre-sliced list
+        """
         items_slice = test_items[3:6]  # Items 3, 4, 5
         response1 = from_iterable(items_slice, limit=3, offset=0)
         response2 = from_iterable(items_slice, limit=3, offset=3)
@@ -419,13 +423,16 @@ class TestPaginatedResponse:
         async_generator_page1 = async_item_generator(test_items[3:6])  # Items 4, 5, 6
 
         # Get first 2 items with offset=3 (for info)
-        response_page1 = await from_async_iterable(async_generator_page1, limit=2,
-                                                   offset=3)
+        response_page1 = await from_async_iterable(
+            async_generator_page1, limit=2, offset=3
+        )
 
         # Assertions for page 1
         assert len(response_page1.data) == 2
         assert response_page1.offset == 3
-        assert response_page1.has_more is True  # Correctly determined because item 6 was fetched
+        assert (
+            response_page1.has_more is True
+        )  # Correctly determined because item 6 was fetched
         assert response_page1.next_offset == 5  # 3 + 2
         assert response_page1.data[0].id == "item-4"
         assert response_page1.data[1].id == "item-5"
@@ -437,8 +444,9 @@ class TestPaginatedResponse:
         async_generator_page2 = async_item_generator(test_items[5:8])  # Items 6, 7, 8
 
         # Get next 3 items with offset=5 (for info)
-        response_page2 = await from_async_iterable(async_generator_page2, limit=3,
-                                                   offset=5)
+        response_page2 = await from_async_iterable(
+            async_generator_page2, limit=3, offset=5
+        )
 
         # Assertions for page 2
         assert len(response_page2.data) == 3  # Should get remaining 3 items
@@ -488,7 +496,8 @@ class TestPaginatedResponse:
 
         assert len(response_viewer.data) == 3
         nested_viewer_response_type = NestedField.create_response_model(
-            Role.VIEWER.value)
+            Role.VIEWER.value
+        )
         for item in response_viewer.data:
             assert hasattr(item, "id")
             assert hasattr(item, "nested")
@@ -499,8 +508,9 @@ class TestPaginatedResponse:
             # --- End FIX ---
 
         # Test with ADMIN role
-        response_admin = from_iterable(nested_items, limit=3, offset=0,
-                                       role=Role.ADMIN.value)
+        response_admin = from_iterable(
+            nested_items, limit=3, offset=0, role=Role.ADMIN.value
+        )
 
         assert len(response_admin.data) == 3
         nested_admin_response_type = NestedField.create_response_model(Role.ADMIN.value)

@@ -4,19 +4,16 @@ Tests for the visible_fields library.
 This file contains comprehensive tests for all aspects of the visible_fields library,
 including field-level visibility, role inheritance, and complex model structures.
 """
+
 import uuid
-from datetime import datetime, timezone # Added timezone
+from datetime import datetime, timezone  # Added timezone
 from enum import Enum
 from types import NoneType
-from typing import ClassVar, Dict, List, Optional, Set, Union, Any # Added Any
+from typing import Any, ClassVar, Dict, List, Optional, Set, Union  # Added Any
 
 import pytest
-from pydantic import ( # Added ConfigDict
-    BaseModel,
-    field_validator,
-    ValidationError,
-    ConfigDict
-)
+from pydantic import ConfigDict  # Added ConfigDict
+from pydantic import BaseModel, ValidationError, field_validator
 
 # Ensure this matches the actual import path for your library
 from pydantic_visible_fields import (
@@ -185,7 +182,8 @@ class ContainerWithUnion(VisibleFieldsModel):
         visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default=None
     )
     tags: List[str] = field(
-        visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default_factory=list # Use default_factory for lists
+        visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN],
+        default_factory=list,  # Use default_factory for lists
     )
     active: bool = field(
         visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN], default=True
@@ -274,6 +272,7 @@ class ValidatedModel(VisibleFieldsModel):
 
 class ModelWithAliases(VisibleFieldsModel):
     """Model with field aliases"""
+
     # Allow population by alias name as well as field name
     model_config = ConfigDict(populate_by_name=True)
 
@@ -304,51 +303,65 @@ NodeWithSelfReference.model_rebuild()
 # Test Group 10: Models for Bug Detection
 # ---------------------------------------
 
+
 class ModelWithSpecificTypes(VisibleFieldsModel):
     """Model for testing type preservation"""
+
     id: str = field(visible_to=[Role.ADMIN])
     event_time: datetime = field(visible_to=[Role.ADMIN])
     unique_id: uuid.UUID = field(visible_to=[Role.ADMIN])
-    current_status: Role = field(visible_to=[Role.ADMIN]) # Use Enum type
+    current_status: Role = field(visible_to=[Role.ADMIN])  # Use Enum type
     optional_int: Optional[int] = field(visible_to=[Role.ADMIN], default=None)
+
 
 class CorruptibleSimpleFieldModel(VisibleFieldsModel):
     """Subclass used only to generate invalid data for specific tests"""
+
     id: str = field(visible_to=[Role.VIEWER, Role.ADMIN])
     name: str = field(visible_to=[Role.VIEWER, Role.ADMIN])
-    value: int = field(visible_to=[Role.ADMIN]) # Expects an int
+    value: int = field(visible_to=[Role.ADMIN])  # Expects an int
 
     # Override to deliberately corrupt data for testing validation
-    def get_invalid_dict(self, role: str, missing_required: bool, wrong_type: bool) -> Dict[str, Any]:
+    def get_invalid_dict(
+        self, role: str, missing_required: bool, wrong_type: bool
+    ) -> Dict[str, Any]:
         """Generates a dict with specific errors"""
-        data = super().visible_dict(role) # Get the valid dict first
+        data = super().visible_dict(role)  # Get the valid dict first
         if role == Role.ADMIN.value:
             if wrong_type and "value" in data:
                 data["value"] = "this-is-not-an-integer"
             if missing_required and "id" in data:
-                 del data["id"]
+                del data["id"]
         return data
+
 
 class CycleNodeA(VisibleFieldsModel):
     id: str = field(visible_to=[Role.VIEWER])
     ref_b: Optional["CycleNodeB"] = field(visible_to=[Role.VIEWER], default=None)
 
+
 class CycleNodeB(VisibleFieldsModel):
     id: str = field(visible_to=[Role.VIEWER])
     ref_a: Optional[CycleNodeA] = field(visible_to=[Role.VIEWER], default=None)
+
 
 # Ensure forward references are resolved
 CycleNodeA.model_rebuild()
 CycleNodeB.model_rebuild()
 
+
 class ConstructTestModel(VisibleFieldsModel):
-    """Model used for testing specific validation cases like constraints and coercion."""
+    """
+    Model used for testing specific validation cases like constraints and coercion.
+    """
+
     id: str = field(visible_to=[Role.ADMIN])
     int_field: int = field(visible_to=[Role.ADMIN])
     required_field: str = field(visible_to=[Role.ADMIN])
     constrained_field: int = field(gt=0, visible_to=[Role.ADMIN])
 
     # REMOVED the visible_dict override - tests will create invalid data manually
+
 
 # Test Fixtures
 # ------------
@@ -448,43 +461,89 @@ def model_with_extended_item():
 @pytest.fixture
 def deep_nested_model():
     child1 = DeepChild(id="dch1", value="Deep child value", metadata="Child metadata")
-    parent1 = DeepParent(id="dp1", child=child1, data="Parent data", metadata="Parent metadata")
-    child2 = DeepChild(id="dch2", value="List child value", metadata="List child metadata")
-    parent2 = DeepParent(id="dp2", child=child2, data="List parent data", metadata="List parent metadata")
-    child3 = DeepChild(id="dch3", value="Another list child value", metadata="Another list child metadata")
-    parent3 = DeepParent(id="dp3", child=child3, data="Another list parent data", metadata="Another list parent metadata")
-    child4 = DeepChild(id="dch4", value="Dict child value", metadata="Dict child metadata")
-    parent4 = DeepParent(id="dp4", child=child4, data="Dict parent data", metadata="Dict parent metadata")
-    child5 = DeepChild(id="dch5", value="Another dict child value", metadata="Another dict child metadata")
-    parent5 = DeepParent(id="dp5", child=child5, data="Another dict parent data", metadata="Another dict parent metadata")
+    parent1 = DeepParent(
+        id="dp1", child=child1, data="Parent data", metadata="Parent metadata"
+    )
+    child2 = DeepChild(
+        id="dch2", value="List child value", metadata="List child metadata"
+    )
+    parent2 = DeepParent(
+        id="dp2", child=child2, data="List parent data", metadata="List parent metadata"
+    )
+    child3 = DeepChild(
+        id="dch3",
+        value="Another list child value",
+        metadata="Another list child metadata",
+    )
+    parent3 = DeepParent(
+        id="dp3",
+        child=child3,
+        data="Another list parent data",
+        metadata="Another list parent metadata",
+    )
+    child4 = DeepChild(
+        id="dch4", value="Dict child value", metadata="Dict child metadata"
+    )
+    parent4 = DeepParent(
+        id="dp4", child=child4, data="Dict parent data", metadata="Dict parent metadata"
+    )
+    child5 = DeepChild(
+        id="dch5",
+        value="Another dict child value",
+        metadata="Another dict child metadata",
+    )
+    parent5 = DeepParent(
+        id="dp5",
+        child=child5,
+        data="Another dict parent data",
+        metadata="Another dict parent metadata",
+    )
     return DeepContainer(
-        id="dc1", parent=parent1, items=[parent2, parent3],
-        mapped_items={"first": parent4, "second": parent5}, metadata="Container metadata",
+        id="dc1",
+        parent=parent1,
+        items=[parent2, parent3],
+        mapped_items={"first": parent4, "second": parent5},
+        metadata="Container metadata",
     )
 
 
 @pytest.fixture
 def tree_structure():
-    parent = TreeNode(id="tn1", data="Parent node data", children_ids=["tn2", "tn3"], metadata="Parent metadata")
-    child1 = TreeNode(id="tn2", data="Child 1 data", parent_id="tn1", metadata="Child 1 metadata")
-    child2 = TreeNode(id="tn3", data="Child 2 data", parent_id="tn1", metadata="Child 2 metadata")
+    parent = TreeNode(
+        id="tn1",
+        data="Parent node data",
+        children_ids=["tn2", "tn3"],
+        metadata="Parent metadata",
+    )
+    child1 = TreeNode(
+        id="tn2", data="Child 1 data", parent_id="tn1", metadata="Child 1 metadata"
+    )
+    child2 = TreeNode(
+        id="tn3", data="Child 2 data", parent_id="tn1", metadata="Child 2 metadata"
+    )
     return {"parent": parent, "child1": child1, "child2": child2}
 
 
 @pytest.fixture
 def validated_model():
-    return ValidatedModel(id="vm1", email="test@example.com", count=50, internal_code="vm-internal")
+    return ValidatedModel(
+        id="vm1", email="test@example.com", count=50, internal_code="vm-internal"
+    )
 
 
 @pytest.fixture
 def aliased_model():
-    return ModelWithAliases(item_id="am1", item_name="Aliased Model", internal_code="am-internal")
+    return ModelWithAliases(
+        item_id="am1", item_name="Aliased Model", internal_code="am-internal"
+    )
 
 
 @pytest.fixture
 def circular_reference():
     node1 = NodeWithSelfReference(id="nr1", name="Node 1", metadata="Node 1 metadata")
-    node2 = NodeWithSelfReference(id="nr2", name="Node 2", self_ref=node1, metadata="Node 2 metadata")
+    node2 = NodeWithSelfReference(
+        id="nr2", name="Node 2", self_ref=node1, metadata="Node 2 metadata"
+    )
     node1.self_ref = node2
     return node1
 
@@ -493,42 +552,56 @@ def circular_reference():
 def empty_list_model():
     return ListModel(id="el1", items=[], metadata="Empty list metadata")
 
+
 # --- Fixtures for Bug Detection ---
+
 
 @pytest.fixture
 def model_with_specific_types():
     return ModelWithSpecificTypes(
-        id="spec1", event_time=datetime.now(timezone.utc), unique_id=uuid.uuid4(),
-        current_status=Role.EDITOR, optional_int=123
+        id="spec1",
+        event_time=datetime.now(timezone.utc),
+        unique_id=uuid.uuid4(),
+        current_status=Role.EDITOR,
+        optional_int=123,
     )
+
 
 @pytest.fixture
 def corruptible_simple_field_model():
     # Instance used to generate invalid dicts for testing validation
     return CorruptibleSimpleFieldModel(id="corr1", name="Corruptible", value=10)
 
+
 @pytest.fixture
 def node_with_direct_cycle():
-    node = NodeWithSelfReference(id="direct_cycle_1", name="Node 1", metadata="Direct Cycle Meta")
-    node.self_ref = node # Create direct cycle
+    node = NodeWithSelfReference(
+        id="direct_cycle_1", name="Node 1", metadata="Direct Cycle Meta"
+    )
+    node.self_ref = node  # Create direct cycle
     return node
+
 
 @pytest.fixture
 def node_with_indirect_cycle():
     node_a = CycleNodeA(id="indirect_a")
     node_b = CycleNodeB(id="indirect_b")
     node_a.ref_b = node_b
-    node_b.ref_a = node_a # Create indirect cycle (A -> B -> A)
+    node_b.ref_a = node_a  # Create indirect cycle (A -> B -> A)
     return node_a
+
 
 @pytest.fixture
 def construct_test_model_instance():
     # Used as a base for creating invalid data for validation tests
-    return ConstructTestModel(id="construct1", int_field=123, required_field="present", constrained_field=10)
+    return ConstructTestModel(
+        id="construct1", int_field=123, required_field="present", constrained_field=10
+    )
 
 
 # Test Cases
 # ----------
+
 
 class TestVisibleFields:
     """Tests for the VisibleFieldsMixin and related functionality"""
@@ -577,8 +650,13 @@ class TestVisibleFields:
         assert len(response.items) == 2
         item_response_type = SimpleFieldModel.create_response_model(Role.VIEWER.value)
         assert all(isinstance(item, item_response_type) for item in response.items)
-        assert all(hasattr(item, "id") and hasattr(item, "name") for item in response.items)
-        assert all(not hasattr(item, "description") and not hasattr(item, "secret") for item in response.items)
+        assert all(
+            hasattr(item, "id") and hasattr(item, "name") for item in response.items
+        )
+        assert all(
+            not hasattr(item, "description") and not hasattr(item, "secret")
+            for item in response.items
+        )
 
     def test_dict_model(self, dict_model):
         viewer_dict = dict_model.visible_dict(Role.VIEWER.value)
@@ -595,8 +673,13 @@ class TestVisibleFields:
         assert len(response.mapping) == 2
         item_response_type = SimpleFieldModel.create_response_model(Role.VIEWER.value)
         assert all(isinstance(v, item_response_type) for v in response.mapping.values())
-        assert all(hasattr(v, "id") and hasattr(v, "name") for v in response.mapping.values())
-        assert all(not hasattr(v, "description") and not hasattr(v, "secret") for v in response.mapping.values())
+        assert all(
+            hasattr(v, "id") and hasattr(v, "name") for v in response.mapping.values()
+        )
+        assert all(
+            not hasattr(v, "description") and not hasattr(v, "secret")
+            for v in response.mapping.values()
+        )
 
     def test_union_basic_item(self, model_with_basic_item):
         viewer_dict = model_with_basic_item.visible_dict(Role.VIEWER.value)
@@ -633,7 +716,9 @@ class TestVisibleFields:
 
         editor_response = model_with_extended_item.to_response_model(Role.EDITOR.value)
         editor_response_item = editor_response.item
-        extended_item_response_type = ExtendedItem.create_response_model(Role.EDITOR.value)
+        extended_item_response_type = ExtendedItem.create_response_model(
+            Role.EDITOR.value
+        )
         assert isinstance(editor_response_item, extended_item_response_type)
         assert editor_response_item.type == ItemType.EXTENDED.value
         assert editor_response_item.target == "target1"
@@ -687,8 +772,13 @@ class TestVisibleFields:
         assert set(viewer_dict.keys()) == {"item_id", "item_name"}
 
         response = aliased_model.to_response_model(Role.VIEWER.value)
-        assert hasattr(response, "item_id") and response.item_id == aliased_model.item_id
-        assert hasattr(response, "item_name") and response.item_name == aliased_model.item_name
+        assert (
+            hasattr(response, "item_id") and response.item_id == aliased_model.item_id
+        )
+        assert (
+            hasattr(response, "item_name")
+            and response.item_name == aliased_model.item_name
+        )
         assert not hasattr(response, "internal_code")
 
         response_dump = response.model_dump(by_alias=True)
@@ -726,12 +816,23 @@ class TestVisibleFields:
     def test_response_model_creation(self, simple_field_model):
         viewer_response = simple_field_model.to_response_model(Role.VIEWER.value)
         assert hasattr(viewer_response, "id") and hasattr(viewer_response, "name")
-        assert not hasattr(viewer_response, "description") and not hasattr(viewer_response, "secret")
+        assert not hasattr(viewer_response, "description") and not hasattr(
+            viewer_response, "secret"
+        )
         editor_response = simple_field_model.to_response_model(Role.EDITOR.value)
-        assert hasattr(editor_response, "id") and hasattr(editor_response, "name") and hasattr(editor_response, "description")
+        assert (
+            hasattr(editor_response, "id")
+            and hasattr(editor_response, "name")
+            and hasattr(editor_response, "description")
+        )
         assert not hasattr(editor_response, "secret")
         admin_response = simple_field_model.to_response_model(Role.ADMIN.value)
-        assert hasattr(admin_response, "id") and hasattr(admin_response, "name") and hasattr(admin_response, "description") and hasattr(admin_response, "secret")
+        assert (
+            hasattr(admin_response, "id")
+            and hasattr(admin_response, "name")
+            and hasattr(admin_response, "description")
+            and hasattr(admin_response, "secret")
+        )
 
     def test_response_model_caching(self):
         ModelType1 = SimpleFieldModel.create_response_model(Role.VIEWER.value)
@@ -742,52 +843,75 @@ class TestVisibleFields:
 
     def test_configure_visibility(self):
         class ConfigurableModel(VisibleFieldsModel):
-             id: str = field(visible_to=[Role.VIEWER])
-             data: str = field()
-
-        original_viewer_fields = ConfigurableModel._get_all_visible_fields(Role.VIEWER.value).copy()
-        original_editor_fields = ConfigurableModel._get_all_visible_fields(Role.EDITOR.value).copy()
+            id: str = field(visible_to=[Role.VIEWER])
+            data: str = field()
 
         try:
-            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {"id"}
-            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id"}
+            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {
+                "id"
+            }
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {
+                "id"
+            }
 
             ConfigurableModel.configure_visibility(Role.EDITOR.value, {"id", "data"})
 
-            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id", "data"}
-            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {"id"}
-            assert ConfigurableModel._get_all_visible_fields(Role.ADMIN.value) == {"id", "data"}
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {
+                "id",
+                "data",
+            }
+            assert ConfigurableModel._get_all_visible_fields(Role.VIEWER.value) == {
+                "id"
+            }
+            assert ConfigurableModel._get_all_visible_fields(Role.ADMIN.value) == {
+                "id",
+                "data",
+            }
 
         finally:
             ConfigurableModel.configure_visibility(Role.EDITOR.value, set())
-            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {"id"}
+            assert ConfigurableModel._get_all_visible_fields(Role.EDITOR.value) == {
+                "id"
+            }
             assert ConfigurableModel._get_all_visible_fields(Role.ADMIN.value) == {"id"}
 
     def test_create_response_model_does_not_corrupt_original_types(self):
         class ModelForTypeCorruptionTest(VisibleFieldsModel):
             id: str = field(visible_to=[Role.VIEWER, Role.EDITOR, Role.ADMIN])
             optional_str: Optional[str] = field(visible_to=[Role.VIEWER], default=None)
-            list_of_int: List[int] = field(visible_to=[Role.EDITOR], default_factory=list)
-            dict_field: Dict[str, float] = field(visible_to=[Role.ADMIN], default_factory=dict)
-            nested_model: Optional[SimpleFieldModel] = field(visible_to=[Role.VIEWER], default=None)
+            list_of_int: List[int] = field(
+                visible_to=[Role.EDITOR], default_factory=list
+            )
+            dict_field: Dict[str, float] = field(
+                visible_to=[Role.ADMIN], default_factory=dict
+            )
+            nested_model: Optional[SimpleFieldModel] = field(
+                visible_to=[Role.VIEWER], default=None
+            )
             secret_data: str = field(visible_to=[Role.ADMIN])
 
         initial_fields = ModelForTypeCorruptionTest.model_fields
-        initial_optional_annotation = initial_fields['optional_str'].annotation
-        initial_list_annotation = initial_fields['list_of_int'].annotation
-        initial_dict_annotation = initial_fields['dict_field'].annotation
-        initial_nested_annotation = initial_fields['nested_model'].annotation
-        initial_simple_annotation = initial_fields['secret_data'].annotation
-        initial_optional_fieldinfo = initial_fields['optional_str']
-        initial_list_fieldinfo = initial_fields['list_of_int']
-        initial_dict_fieldinfo = initial_fields['dict_field']
-        initial_nested_fieldinfo = initial_fields['nested_model']
-        initial_simple_fieldinfo = initial_fields['secret_data']
+        initial_optional_annotation = initial_fields["optional_str"].annotation
+        initial_list_annotation = initial_fields["list_of_int"].annotation
+        initial_dict_annotation = initial_fields["dict_field"].annotation
+        initial_nested_annotation = initial_fields["nested_model"].annotation
+        initial_simple_annotation = initial_fields["secret_data"].annotation
+        initial_optional_fieldinfo = initial_fields["optional_str"]
+        initial_list_fieldinfo = initial_fields["list_of_int"]
+        initial_dict_fieldinfo = initial_fields["dict_field"]
+        initial_nested_fieldinfo = initial_fields["nested_model"]
+        initial_simple_fieldinfo = initial_fields["secret_data"]
 
-        assert initial_optional_annotation == Union[str, NoneType] or initial_optional_annotation == Optional[str]
+        assert (
+            initial_optional_annotation == Union[str, NoneType]
+            or initial_optional_annotation == Optional[str]
+        )
         assert initial_list_annotation == List[int]
         assert initial_dict_annotation == Dict[str, float]
-        assert initial_nested_annotation == Union[SimpleFieldModel, NoneType] or initial_nested_annotation == Optional[SimpleFieldModel]
+        assert (
+            initial_nested_annotation == Union[SimpleFieldModel, NoneType]
+            or initial_nested_annotation == Optional[SimpleFieldModel]
+        )
         assert initial_simple_annotation == str
 
         _ = ModelForTypeCorruptionTest.create_response_model(Role.VIEWER.value)
@@ -795,31 +919,53 @@ class TestVisibleFields:
         _ = ModelForTypeCorruptionTest.create_response_model(Role.ADMIN.value)
 
         final_fields = ModelForTypeCorruptionTest.model_fields
-        final_optional_annotation = final_fields['optional_str'].annotation
-        final_list_annotation = final_fields['list_of_int'].annotation
-        final_dict_annotation = final_fields['dict_field'].annotation
-        final_nested_annotation = final_fields['nested_model'].annotation
-        final_simple_annotation = final_fields['secret_data'].annotation
-        final_optional_fieldinfo = final_fields['optional_str']
-        final_list_fieldinfo = final_fields['list_of_int']
-        final_dict_fieldinfo = final_fields['dict_field']
-        final_nested_fieldinfo = final_fields['nested_model']
-        final_simple_fieldinfo = final_fields['secret_data']
+        final_optional_annotation = final_fields["optional_str"].annotation
+        final_list_annotation = final_fields["list_of_int"].annotation
+        final_dict_annotation = final_fields["dict_field"].annotation
+        final_nested_annotation = final_fields["nested_model"].annotation
+        final_simple_annotation = final_fields["secret_data"].annotation
+        final_optional_fieldinfo = final_fields["optional_str"]
+        final_list_fieldinfo = final_fields["list_of_int"]
+        final_dict_fieldinfo = final_fields["dict_field"]
+        final_nested_fieldinfo = final_fields["nested_model"]
+        final_simple_fieldinfo = final_fields["secret_data"]
 
-        assert final_optional_annotation == initial_optional_annotation, "Optional field annotation changed"
-        assert final_list_annotation == initial_list_annotation, "List field annotation changed"
-        assert final_dict_annotation == initial_dict_annotation, "Dict field annotation changed"
-        assert final_nested_annotation == initial_nested_annotation, "Nested Model field annotation changed"
-        assert final_simple_annotation == initial_simple_annotation, "Simple field annotation changed"
-        assert final_optional_fieldinfo is initial_optional_fieldinfo, "Optional FieldInfo object identity changed"
-        assert final_list_fieldinfo is initial_list_fieldinfo, "List FieldInfo object identity changed"
-        assert final_dict_fieldinfo is initial_dict_fieldinfo, "Dict FieldInfo object identity changed"
-        assert final_nested_fieldinfo is initial_nested_fieldinfo, "Nested Model FieldInfo object identity changed"
-        assert final_simple_fieldinfo is initial_simple_fieldinfo, "Simple FieldInfo object identity changed"
+        assert (
+            final_optional_annotation == initial_optional_annotation
+        ), "Optional field annotation changed"
+        assert (
+            final_list_annotation == initial_list_annotation
+        ), "List field annotation changed"
+        assert (
+            final_dict_annotation == initial_dict_annotation
+        ), "Dict field annotation changed"
+        assert (
+            final_nested_annotation == initial_nested_annotation
+        ), "Nested Model field annotation changed"
+        assert (
+            final_simple_annotation == initial_simple_annotation
+        ), "Simple field annotation changed"
+        assert (
+            final_optional_fieldinfo is initial_optional_fieldinfo
+        ), "Optional FieldInfo object identity changed"
+        assert (
+            final_list_fieldinfo is initial_list_fieldinfo
+        ), "List FieldInfo object identity changed"
+        assert (
+            final_dict_fieldinfo is initial_dict_fieldinfo
+        ), "Dict FieldInfo object identity changed"
+        assert (
+            final_nested_fieldinfo is initial_nested_fieldinfo
+        ), "Nested Model FieldInfo object identity changed"
+        assert (
+            final_simple_fieldinfo is initial_simple_fieldinfo
+        ), "Simple FieldInfo object identity changed"
 
     # --- Tests for Validation Behavior (Using model_validate) ---
 
-    def test_to_response_model_preserves_types_without_json_loss(self, model_with_specific_types):
+    def test_to_response_model_preserves_types_without_json_loss(
+        self, model_with_specific_types
+    ):
         """Tests that to_response_model preserves specific Python types."""
         original_model = model_with_specific_types
         role = Role.ADMIN.value
@@ -831,36 +977,50 @@ class TestVisibleFields:
         assert isinstance(response_model_instance.optional_int, int)
         assert response_model_instance.current_status == Role.EDITOR
 
-    def test_to_response_model_raises_validation_error_not_fallback(self, corruptible_simple_field_model):
+    def test_to_response_model_raises_validation_error_not_fallback(
+        self, corruptible_simple_field_model
+    ):
         """Tests that to_response_model raises ValidationError when data is invalid."""
         model = corruptible_simple_field_model
-        role = Role.ADMIN.value # Triggers bad data ('value' is str, 'id' is missing)
+        role = Role.ADMIN.value  # Triggers bad data ('value' is str, 'id' is missing)
 
         with pytest.raises(ValidationError) as exc_info:
             # Get the invalid dict using the helper method
-            invalid_data = model.get_invalid_dict(role=role, missing_required=True, wrong_type=True)
+            invalid_data = model.get_invalid_dict(
+                role=role, missing_required=True, wrong_type=True
+            )
             # Get the response model type
             response_model_cls = model.__class__.create_response_model(role=role)
             # Validate the specifically crafted invalid data
             response_model_cls.model_validate(invalid_data)
 
         errors = exc_info.value.errors()
-        error_locs = {err.get('loc',())[0] for err in errors if err.get('loc')}
-        error_types = {err['type'] for err in errors}
-        assert 'id' in error_locs or 'missing' in error_types
-        assert 'value' in error_locs or 'int_parsing' in error_types or 'integer_type' in error_types
+        error_locs = {err.get("loc", ())[0] for err in errors if err.get("loc")}
+        error_types = {err["type"] for err in errors}
+        assert "id" in error_locs or "missing" in error_types
+        assert (
+            "value" in error_locs
+            or "int_parsing" in error_types
+            or "integer_type" in error_types
+        )
 
-
-    def test_visible_dict_handles_cycles_correctly(self, node_with_direct_cycle, node_with_indirect_cycle):
+    def test_visible_dict_handles_cycles_correctly(
+        self, node_with_direct_cycle, node_with_indirect_cycle
+    ):
         """Tests cycle detection in visible_dict."""
         direct_cycle_dict = node_with_direct_cycle.visible_dict(role=Role.VIEWER.value)
         assert "self_ref" in direct_cycle_dict
         ref_in_direct_cycle = direct_cycle_dict["self_ref"]
         assert isinstance(ref_in_direct_cycle, dict)
         assert ref_in_direct_cycle.get("__cycle_reference__") is True
-        assert "id" in ref_in_direct_cycle and ref_in_direct_cycle["id"] == node_with_direct_cycle.id
+        assert (
+            "id" in ref_in_direct_cycle
+            and ref_in_direct_cycle["id"] == node_with_direct_cycle.id
+        )
 
-        indirect_cycle_dict_a = node_with_indirect_cycle.visible_dict(role=Role.VIEWER.value)
+        indirect_cycle_dict_a = node_with_indirect_cycle.visible_dict(
+            role=Role.VIEWER.value
+        )
         assert "ref_b" in indirect_cycle_dict_a
         ref_b_dict = indirect_cycle_dict_a["ref_b"]
         assert isinstance(ref_b_dict, dict)
@@ -868,9 +1028,14 @@ class TestVisibleFields:
         ref_a_in_b_dict = ref_b_dict["ref_a"]
         assert isinstance(ref_a_in_b_dict, dict)
         assert ref_a_in_b_dict.get("__cycle_reference__") is True
-        assert "id" in ref_a_in_b_dict and ref_a_in_b_dict["id"] == node_with_indirect_cycle.id
+        assert (
+            "id" in ref_a_in_b_dict
+            and ref_a_in_b_dict["id"] == node_with_indirect_cycle.id
+        )
 
-    def test_to_response_model_validate_enforces_constraints(self, construct_test_model_instance):
+    def test_to_response_model_validate_enforces_constraints(
+        self, construct_test_model_instance
+    ):
         """Verify model_validate raises error for constraint violations."""
         model = construct_test_model_instance
         role = Role.ADMIN.value
@@ -880,17 +1045,22 @@ class TestVisibleFields:
         valid_visible_data = model.visible_dict(role=role)
         # Manually create invalid data just for this test
         invalid_data = valid_visible_data.copy()
-        invalid_data["constrained_field"] = -5 # Violates gt=0
+        invalid_data["constrained_field"] = -5  # Violates gt=0
 
         with pytest.raises(ValidationError) as exc_info:
             # Validate the modified data directly
             model_cls.model_validate(invalid_data)
 
         # Check error details
-        assert any(err['type'] == 'greater_than' and err.get('loc',()) == ('constrained_field',) for err in exc_info.value.errors())
+        assert any(
+            err["type"] == "greater_than"
+            and err.get("loc", ()) == ("constrained_field",)
+            for err in exc_info.value.errors()
+        )
 
-
-    def test_to_response_model_validate_performs_type_coercion(self, construct_test_model_instance):
+    def test_to_response_model_validate_performs_type_coercion(
+        self, construct_test_model_instance
+    ):
         """Verify model_validate performs standard type coercion (e.g., str to int)."""
         model = construct_test_model_instance
         role = Role.ADMIN.value
@@ -900,12 +1070,12 @@ class TestVisibleFields:
         valid_visible_data = model.visible_dict(role=role)
         # Manually create data requiring coercion
         coercible_data = valid_visible_data.copy()
-        coercible_data["int_field"] = "123" # String "123"
+        coercible_data["int_field"] = "123"  # String "123"
 
         # Validate - should succeed and coerce
         response = model_cls.model_validate(coercible_data)
 
         # Assert coercion happened
         assert hasattr(response, "int_field")
-        assert response.int_field == 123 # Check value
-        assert isinstance(response.int_field, int) # Check type
+        assert response.int_field == 123  # Check value
+        assert isinstance(response.int_field, int)  # Check type
